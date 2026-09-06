@@ -14,14 +14,17 @@ services:
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
+      HEADROOM_URL: ${HEADROOM_URL:-http://headroom:8787}
 
+  # Optional compression sidecar. Token Saver -> Headroom is off by default in
+  # the dashboard, so this service stays out of `docker compose up` unless you
+  # ask for it:  docker compose --profile headroom up -d
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
     container_name: headroom
     restart: always
+    profiles:
+      - headroom
     ports:
       - "8787:8787"
 

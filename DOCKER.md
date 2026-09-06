@@ -66,7 +66,13 @@ docker run -d \
 
 ## Optional Headroom sidecar
 
-The 9Router image does not bundle Python or Headroom. To use Headroom in Docker, run it as a separate service and point 9Router at that proxy:
+The 9Router image does not bundle Python or Headroom. The bundled `docker-compose.yml` already defines the sidecar behind a Compose profile, so it is skipped by a plain `docker compose up` and only starts when you ask for it:
+
+```bash
+docker compose --profile headroom up -d
+```
+
+If you are writing your own compose file, the sidecar looks like this:
 
 ```yaml
 services:
@@ -79,14 +85,16 @@ services:
     environment:
       DATA_DIR: /app/data
       HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
 
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
+    profiles:
+      - headroom
     ports:
       - "8787:8787"
 ```
+
+Leave `depends_on` off: 9Router talks to Headroom over HTTP per request and fails open if it is unreachable, so it does not need the sidecar to be up first — and a `depends_on` pointing at a profiled service makes `docker compose up` fail when the profile is off.
 
 In the dashboard, open `Endpoint` → `Token Saver` → `Headroom`, confirm the URL is `http://headroom:8787`, recheck status, then enable Headroom.
 
