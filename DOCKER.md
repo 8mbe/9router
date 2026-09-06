@@ -19,6 +19,17 @@ docker run -d \
 
 App listens on port `20128`. Open: http://localhost:20128
 
+## Docker Compose
+
+The bundled `docker-compose.yml` builds the image from this repo's `Dockerfile` rather than pulling the published one, so it runs whatever is in your checkout:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+The build is tagged locally as `9router:local`. Use the `docker run` command above instead if you want the prebuilt `decolua/9router:latest` without compiling anything.
+
 ## Manage container
 
 ```bash
@@ -102,10 +113,19 @@ If Headroom runs on the Docker host instead of as a sidecar, use `http://host.do
 
 ## Update to latest
 
+Published image:
+
 ```bash
 docker pull decolua/9router:latest
 docker rm -f 9router
 # re-run the quick start command
+```
+
+Compose (rebuilds from your checkout):
+
+```bash
+git pull
+docker compose up -d --build
 ```
 
 ---
