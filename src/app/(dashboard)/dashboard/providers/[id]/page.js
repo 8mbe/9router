@@ -81,6 +81,7 @@ export default function ProviderDetailPage() {
   const [oneByOneSummary, setOneByOneSummary] = useState(null);
   const stopOneByOneRef = useRef(false);
   const [importingQoderModels, setImportingQoderModels] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const { copied, copy } = useCopyToClipboard();
 
   const AG_RISK_STORAGE_KEY = "ag_risk_confirmed";
@@ -527,12 +528,20 @@ export default function ProviderDetailPage() {
     }
   };
 
-  const handleAddCustomModel = async (modelId, type = "llm", providerAliasOverride = providerStorageAlias, caps) => {
+  // contextLength is passed as undefined by callers that don't know it, which leaves
+  // any previously stored window untouched rather than clearing it.
+  const handleAddCustomModel = async (modelId, type = "llm", providerAliasOverride = providerStorageAlias, caps, contextLength) => {
     try {
       const res = await fetch("/api/models/custom", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerAlias: providerAliasOverride, id: modelId, type, ...(caps ? { caps } : {}) }),
+        body: JSON.stringify({
+          providerAlias: providerAliasOverride,
+          id: modelId,
+          type,
+          ...(caps ? { caps } : {}),
+          ...(contextLength !== undefined ? { contextLength } : {}),
+        }),
       });
       if (res.ok) {
         await fetchCustomModels();
@@ -1072,10 +1081,21 @@ export default function ProviderDetailPage() {
     }
   };
 
+  // Search matches on the model id and its display name, so both "sonnet" and the
+  // full "claude-sonnet-4-5" find the same row. Empty query matches everything.
+  const modelSearchQuery = modelSearch.trim().toLowerCase();
+  const matchesModelSearch = (...fields) => {
+    if (!modelSearchQuery) return true;
+    return fields.some(
+      (field) => typeof field === "string" && field.toLowerCase().includes(modelSearchQuery)
+    );
+  };
+
   const renderModelsSection = () => {
     if (isCompatible) {
       return (
         <CompatibleModelsSection
+          searchQuery={modelSearch}
           providerStorageAlias={providerStorageAlias}
           providerDisplayAlias={providerDisplayAlias}
           modelAliases={modelAliases}
@@ -1084,7 +1104,7 @@ export default function ProviderDetailPage() {
           onCopy={copy}
           onSetAlias={handleSetAlias}
           onDeleteAlias={handleDeleteAlias}
-          onAddCustomModel={(modelId) => handleAddCustomModel(modelId, "llm", providerStorageAlias)}
+          onAddCustomModel={(modelId, extra) => handleAddCustomModel(modelId, "llm", providerStorageAlias, undefined, extra?.contextLength)}
           onDeleteCustomModel={(modelId) => handleDeleteCustomModel(modelId, "llm", providerStorageAlias)}
           connections={connections}
           isAnthropic={isAnthropicCompatible}
@@ -1098,15 +1118,24 @@ export default function ProviderDetailPage() {
       ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
     ].filter((m) => { const k = getModelKind(m); return !k || k === "llm"; });
     const disabledSet = new Set(disabledModelIds);
-    const displayModels = allModels.filter((m) => !disabledSet.has(m.id));
-    const disabledDisplayModels = allModels.filter((m) => disabledSet.has(m.id));
-    const customModelRows = getProviderCustomModelRows({
+    const searchable = allModels.filter((m) => matchesModelSearch(m.id, m.name));
+    const displayModels = searchable.filter((m) => !disabledSet.has(m.id));
+    const disabledDisplayModels = searchable.filter((m) => disabledSet.has(m.id));
+    // Unfiltered — the "suggested models" list below needs the full set of
+    // already-added models regardless of what the search box is showing.
+    const allCustomModelRows = getProviderCustomModelRows({
       customModels,
       modelAliases,
       providerAlias: providerStorageAlias,
       builtInModels: models,
       type: "llm",
     });
+    const customModelRows = allCustomModelRows.filter((m) => matchesModelSearch(m.id, m.name, m.alias));
+    const noSearchResults =
+      !!modelSearchQuery
+      && customModelRows.length === 0
+      && displayModels.length === 0
+      && disabledDisplayModels.length === 0;
 
     return (
       <div className="flex flex-wrap gap-3">
@@ -1164,6 +1193,12 @@ export default function ProviderDetailPage() {
           );
         })}
 
+        {noSearchResults && (
+          <p className="w-full py-4 text-center text-sm text-text-muted">
+            No models match &ldquo;{modelSearch.trim()}&rdquo;.
+          </p>
+        )}
+
         {/* Add model button — inline, same style as model chips */}
         <button
           onClick={() => setShowAddCustomModel(true)}
@@ -1191,11 +1226,13 @@ export default function ProviderDetailPage() {
         {suggestedModels.length > 0 && (() => {
           const addedFullModels = new Set([
             ...Object.values(modelAliases),
-            ...customModelRows.map((model) => model.fullModel),
+            ...allCustomModelRows.map((model) => model.fullModel),
           ]);
           const hardcodedIds = new Set(models.map((m) => m.id));
           const notAdded = suggestedModels.filter(
-            (m) => !addedFullModels.has(`${providerStorageAlias}/${m.id}`) && !hardcodedIds.has(m.id)
+            (m) => !addedFullModels.has(`${providerStorageAlias}/${m.id}`)
+              && !hardcodedIds.has(m.id)
+              && matchesModelSearch(m.id, m.name)
           );
           if (notAdded.length === 0) return null;
           return (
@@ -1695,6 +1732,29 @@ export default function ProviderDetailPage() {
               </div>
             );
           })()}
+        </div>
+        <div className="relative mb-4">
+          <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base text-text-muted">
+            search
+          </span>
+          <input
+            type="search"
+            value={modelSearch}
+            onChange={(e) => setModelSearch(e.target.value)}
+            placeholder={translate("Search models...")}
+            aria-label={translate("Search models")}
+            className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-9 text-sm focus:border-primary focus:outline-none"
+          />
+          {modelSearch && (
+            <button
+              type="button"
+              onClick={() => setModelSearch("")}
+              aria-label={translate("Clear search")}
+              className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center justify-center rounded p-1 text-text-muted transition-colors hover:text-primary"
+            >
+              <span className="material-symbols-outlined text-base">close</span>
+            </button>
+          )}
         </div>
         {!!modelsTestError && (
           <p className="text-xs text-red-500 mb-3 break-words">{modelsTestError}</p>

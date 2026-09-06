@@ -25,6 +25,10 @@ const DEFAULT_SETTINGS = {
   },
   requireLogin: true,
   requireApiKey: true,
+  // Order account fallback by stored key×model probe verdicts (see
+  // src/lib/modelProbe/routingHints.js). Set false to fall back to pure
+  // priority/round-robin ordering.
+  probeAwareRouting: true,
   tunnelDashboardAccess: true,
   authMode: "password",
   ssoType: "oidc",

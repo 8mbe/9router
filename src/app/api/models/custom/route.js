@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCustomModels, addCustomModel, deleteCustomModel } from "@/models";
 import { CAPACITY_META } from "@/shared/constants/models";
+import { normalizeContextLength } from "@/lib/modelProbe/contextLength";
 
 export const dynamic = "force-dynamic";
 
@@ -28,12 +29,23 @@ export async function GET() {
 // POST /api/models/custom - Add custom model
 export async function POST(request) {
   try {
-    const { providerAlias, id, type, name, caps } = await request.json();
+    const { providerAlias, id, type, name, caps, contextLength } = await request.json();
     if (!providerAlias || !id) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
     const cleanCaps = sanitizeCaps(caps);
-    const added = await addCustomModel({ providerAlias, id, type: type || "llm", name, ...(cleanCaps ? { caps: cleanCaps } : {}) });
+    // Absent = leave any stored window alone; explicit null = clear it. An
+    // unparseable value is treated as "clear" rather than silently stored.
+    const hasContext = contextLength !== undefined;
+    const cleanContext = hasContext ? normalizeContextLength(contextLength) : undefined;
+    const added = await addCustomModel({
+      providerAlias,
+      id,
+      type: type || "llm",
+      name,
+      ...(cleanCaps ? { caps: cleanCaps } : {}),
+      ...(hasContext ? { contextLength: cleanContext } : {}),
+    });
     return NextResponse.json({ success: true, added });
   } catch (error) {
     console.log("Error adding custom model:", error);

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { invalidateUpstreamModels } from "@/lib/modelCatalog/upstreamCache";
 import {
   getProviderConnectionById,
   getProxyPoolById,
@@ -156,6 +157,10 @@ export async function PUT(request, { params }) {
     }
 
     const updated = await updateProviderConnection(id, updateData);
+    // Credentials or baseUrl may have changed, so the cached upstream catalog for
+    // this connection now belongs to a different account/endpoint.
+    invalidateUpstreamModels(`live:${id}:`);
+    invalidateUpstreamModels(`compat:${id}:`);
 
     // Hide sensitive fields
     const result = { ...updated };
@@ -180,6 +185,8 @@ export async function DELETE(request, { params }) {
     if (!deleted) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
+    invalidateUpstreamModels(`live:${id}:`);
+    invalidateUpstreamModels(`compat:${id}:`);
 
     return NextResponse.json({ message: "Connection deleted successfully" });
   } catch (error) {

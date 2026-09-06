@@ -18,6 +18,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
+import { getCachedUpstream } from "@/lib/modelCatalog/upstreamCache";
 
 // Per-provider live model resolvers. Each receives a connection record and
 // returns { models: [{ id, name? }, ...] } | null on failure.
@@ -238,6 +239,62 @@ function comboMatchesKinds(combo, kindFilter) {
 }
 
 /**
+ * Resolve a provider's upstream model catalog — the only part of the list that
+ * costs a network round trip, and so the only part that is cached. Everything
+ * else (aliases, custom models, disabled models, combos, pinned enabledModels)
+ * stays a fresh DB read, so dashboard edits show up on the very next request.
+ *
+ * Returns null when this provider's models come purely from local config.
+ */
+async function resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch }) {
+  const enabledModels = conn?.providerSpecificData?.enabledModels;
+  // A pinned model list is the account's own answer; upstream is never consulted.
+  if (Array.isArray(enabledModels) && enabledModels.length > 0) return null;
+
+  // Config-driven live catalog override (e.g. Kiro returns dynamic
+  // -thinking/-agentic variants per account).
+  const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
+  if (liveResolver) {
+    const liveModels = await getCachedUpstream(`live:${conn.id}:${providerId}`, async () => {
+      try {
+        const result = await liveResolver(conn);
+        return result?.models?.length ? result.models : null;
+      } catch (err) {
+        console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
+        return null;
+      }
+    });
+    if (!liveModels?.length) return null;
+    return {
+      modelIds: liveModels.map((m) => m.id),
+      liveModelKindById: new Map(
+        liveModels.filter((m) => m?.id).map((m) => [m.id, modelKind(m)])
+      ),
+      liveCapabilitiesById: new Map(
+        liveModels.filter((m) => m?.id && m.capabilities).map((m) => [m.id, m.capabilities])
+      ),
+    };
+  }
+
+  // Compatible providers with no static catalog: ask their /models endpoint.
+  if (skipDynamicFetch) return null;
+  const isCompatibleProvider =
+    isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+  if (!isCompatibleProvider) return null;
+  const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+  if ((PROVIDER_MODELS[staticAlias] || []).length > 0) return null;
+
+  const baseUrl = typeof conn?.providerSpecificData?.baseUrl === "string"
+    ? conn.providerSpecificData.baseUrl.trim().replace(/\/$/, "")
+    : "";
+  const modelIds = await getCachedUpstream(`compat:${conn.id}:${baseUrl}`, async () => {
+    const fetched = await fetchCompatibleModelIds(conn);
+    return fetched.length ? fetched : null;
+  });
+  return modelIds?.length ? { modelIds } : null;
+}
+
+/**
  * Build OpenAI-format models list filtered by service kinds.
  * @param {string[]} kindFilter - List of service kinds to include (e.g. ["llm"], ["webSearch","webFetch"]).
  */
@@ -342,6 +399,20 @@ export async function buildModelsList(kindFilter, options = {}) {
       });
     }
   } else {
+    // Every upstream catalog this request needs is resolved up front and in
+    // parallel, so a cold list costs one round trip rather than one per provider
+    // (each with a multi-second timeout) and a warm one costs none at all.
+    const upstreamByProvider = new Map(
+      await Promise.all(
+        Array.from(activeConnectionByProvider.entries())
+          .filter(([providerId]) => providerMatchesKinds(providerId, kindFilter))
+          .map(async ([providerId, conn]) => [
+            providerId,
+            await resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch }),
+          ])
+      )
+    );
+
     for (const [providerId, conn] of activeConnectionByProvider.entries()) {
       if (!providerMatchesKinds(providerId, kindFilter)) continue;
 
@@ -355,9 +426,6 @@ export async function buildModelsList(kindFilter, options = {}) {
       const enabledModels = conn?.providerSpecificData?.enabledModels;
       const hasExplicitEnabledModels =
         Array.isArray(enabledModels) && enabledModels.length > 0;
-      const isCompatibleProvider =
-        isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
-
       // Build kind lookup for static models so we can filter even when only IDs are exposed
       const staticModelKindById = new Map(
         providerModels.map((m) => [m.id, modelKind(m)])
@@ -375,33 +443,13 @@ export async function buildModelsList(kindFilter, options = {}) {
           )
         : providerModels.map((model) => model.id);
 
-      if (isCompatibleProvider && rawModelIds.length === 0 && !skipDynamicFetch) {
-        rawModelIds = await fetchCompatibleModelIds(conn);
-      }
-
-      // Config-driven live catalog override (e.g. Kiro returns dynamic
-      // -thinking/-agentic variants per account). On failure, fall back to
-      // whatever rawModelIds already holds.
-      const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
-      if (liveResolver && !hasExplicitEnabledModels) {
-        try {
-          const live = await liveResolver(conn);
-          if (live?.models?.length) {
-            rawModelIds = live.models.map((m) => m.id);
-            liveModelKindById = new Map(
-              live.models
-                .filter((m) => m?.id)
-                .map((m) => [m.id, modelKind(m)])
-            );
-            liveCapabilitiesById = new Map(
-              live.models
-                .filter((m) => m?.id && m.capabilities)
-                .map((m) => [m.id, m.capabilities])
-            );
-          }
-        } catch (err) {
-          console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
-        }
+      // Upstream (live catalog or a compatible provider's /models) wins over the
+      // static table when it resolved; on failure rawModelIds keeps what it has.
+      const upstream = upstreamByProvider.get(providerId);
+      if (upstream?.modelIds?.length) {
+        rawModelIds = upstream.modelIds;
+        if (upstream.liveModelKindById) liveModelKindById = upstream.liveModelKindById;
+        if (upstream.liveCapabilitiesById) liveCapabilitiesById = upstream.liveCapabilitiesById;
       }
 
       const modelIds = rawModelIds

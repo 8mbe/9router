@@ -50,6 +50,11 @@ export {
   getPricing, getPricingForModel, updatePricing, resetPricing, resetAllPricing,
 } from "./repos/pricingRepo.js";
 
+// Per (connection, model) probe verdicts
+export {
+  getModelProbes, setModelProbe, clearModelProbes,
+} from "./repos/modelProbesRepo.js";
+
 // Disabled models
 export {
   getDisabledModels, getDisabledByProvider, disableModels, enableModels,

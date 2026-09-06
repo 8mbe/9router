@@ -15,6 +15,7 @@ describe("provider custom model rows", () => {
         fullModel: "ollama/minimax-m2.5",
         source: "custom",
         type: "llm",
+        contextLength: null,
       },
     ]);
     expect(getProviderCustomModelRows({ customModels, providerAlias: "opencode-go" })).toEqual([
@@ -24,6 +25,7 @@ describe("provider custom model rows", () => {
         fullModel: "opencode-go/minimax-m2.5",
         source: "custom",
         type: "llm",
+        contextLength: null,
       },
     ]);
   });
@@ -48,6 +50,7 @@ describe("provider custom model rows", () => {
         fullModel: "ollama/custom-a",
         source: "custom",
         type: "llm",
+        contextLength: null,
       },
       {
         id: "legacy-b",
@@ -55,6 +58,7 @@ describe("provider custom model rows", () => {
         fullModel: "ollama/legacy-b",
         source: "legacyAlias",
         type: "llm",
+        contextLength: null,
       },
     ]);
   });
@@ -78,7 +82,23 @@ describe("provider custom model rows", () => {
         fullModel: "ollama/custom-llm",
         source: "custom",
         type: "llm",
+        contextLength: null,
       },
+    ]);
+  });
+
+  it("carries a stored context window through to the row", () => {
+    const rows = getProviderCustomModelRows({
+      customModels: [
+        { providerAlias: "ollama", id: "big-ctx", type: "llm", name: "Big", contextLength: 262144 },
+        { providerAlias: "ollama", id: "no-ctx", type: "llm", name: "Plain" },
+      ],
+      providerAlias: "ollama",
+    });
+
+    expect(rows.map((r) => [r.id, r.contextLength])).toEqual([
+      ["big-ctx", 262144],
+      ["no-ctx", null],
     ]);
   });
 });

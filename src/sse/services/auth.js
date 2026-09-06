@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { getProbeHints, orderConnectionsByProbe, recordLiveOutcome } from "@/lib/modelProbe/routingHints";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -138,6 +139,27 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const providerOverride = (settings.providerStrategies || {})[providerId] || {};
     const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
 
+    // Bias the candidate pool by what we already know about each key for THIS model.
+    // Without this, a key proven not to serve the model is still tried first on every
+    // request: it fails upstream, takes a modelLock, falls back — and repeats once the
+    // lock expires. Verdicts come from the dashboard's key×model tests and from live
+    // traffic (see recordLiveOutcome below). Opt out with settings.probeAwareRouting=false.
+    let candidateConnections = availableConnections;
+    if (settings.probeAwareRouting !== false && model) {
+      const hints = await getProbeHints();
+      const { pool, working, broken, demoted } = orderConnectionsByProbe(availableConnections, model, hints);
+      if (pool.length > 0) {
+        candidateConnections = pool;
+        if (demoted > 0) {
+          log.debug("AUTH", `${provider} | probe hints: ${working.length} known-good, ${demoted} known-bad for ${model} (deprioritized)`);
+        }
+      } else if (broken.length > 0) {
+        // Everything we know about failed; still try rather than 404 — a verdict can
+        // be wrong or the provider may have changed.
+        log.debug("AUTH", `${provider} | all ${broken.length} keys previously failed ${model} — retrying anyway`);
+      }
+    }
+
     let connection;
     // Pin to preferred connection if specified and available
     if (preferredConnectionId) {
@@ -152,7 +174,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const stickyLimit = providerOverride.stickyRoundRobinLimit || settings.stickyRoundRobinLimit || 3;
 
       // Sort by lastUsed (most recent first) to find current candidate
-      const byRecency = [...availableConnections].sort((a, b) => {
+      const byRecency = [...candidateConnections].sort((a, b) => {
         if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
         if (!a.lastUsedAt) return 1;
         if (!b.lastUsedAt) return -1;
@@ -172,7 +194,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         });
       } else {
         // Pick the least recently used (excluding current if possible)
-        const sortedByOldest = [...availableConnections].sort((a, b) => {
+        const sortedByOldest = [...candidateConnections].sort((a, b) => {
           if (!a.lastUsedAt && !b.lastUsedAt) return (a.priority || 999) - (b.priority || 999);
           if (!a.lastUsedAt) return -1;
           if (!b.lastUsedAt) return 1;
@@ -188,8 +210,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         });
       }
     } else {
-      // Default: fill-first (already sorted by priority in getProviderConnections)
-      connection = availableConnections[0];
+      // Default: fill-first — candidateConnections keeps priority order within each
+      // probe tier, so known-good keys lead and known-bad ones are already dropped.
+      connection = candidateConnections[0];
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
@@ -275,6 +298,14 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     backoffLevel: newBackoffLevel ?? backoffLevel
   });
 
+  // Teach routing from live traffic, not just from the dashboard's test button.
+  // recordLiveOutcome ignores transient statuses (429/5xx) — only a durable
+  // "this key cannot serve this model" (401/403/404, or a model-shaped 400) sticks.
+  if (model) {
+    recordLiveOutcome({ connectionId, providerId: resolveProviderId(provider), modelId: model, ok: false, status, error: errorText })
+      .catch(() => {});
+  }
+
   const lockKey = Object.keys(lockUpdate)[0];
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
   log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
@@ -295,9 +326,18 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
  * @param {object} currentConnection - credentials object (has _connection) or raw connection
  * @param {string|null} model - model that succeeded
  */
-export async function clearAccountError(connectionId, currentConnection, model = null) {
+export async function clearAccountError(connectionId, currentConnection, model = null, provider = null) {
   if (!connectionId || connectionId === "noauth") return;
   const conn = currentConnection._connection || currentConnection;
+
+  // A real success is the strongest evidence this key serves this model, and it is
+  // what lets a stale "broken" verdict heal itself without a manual re-test.
+  const providerId = provider || conn?.provider;
+  if (model && providerId) {
+    recordLiveOutcome({ connectionId, providerId: resolveProviderId(providerId), modelId: model, ok: true })
+      .catch(() => {});
+  }
+
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));
 

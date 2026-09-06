@@ -29,6 +29,7 @@ export function getProviderCustomModelRows({
       fullModel,
       source: "custom",
       type: rowType,
+      contextLength: model.contextLength ?? null,
     });
   }
 
@@ -47,6 +48,7 @@ export function getProviderCustomModelRows({
       fullModel,
       source: "legacyAlias",
       type: type || "llm",
+      contextLength: null,
     });
   }
 
