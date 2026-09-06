@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { CLAUDE_CLI_VERSION, CLAUDE_SDK_VERSION } from "open-sse/providers/shared.js";
 
 // ─── DefaultExecutor.buildHeaders() ──────────────────────────────────────────
 
@@ -29,7 +30,11 @@ describe("DefaultExecutor.buildHeaders() — claude provider", () => {
       headers["Anthropic-Version"] === "2023-06-01" ||
       headers["anthropic-version"] === "2023-06-01";
     expect(hasVersion).toBe(true);
-    expect(headers["User-Agent"]).toBe("claude-cli/2.1.258 (external, sdk-cli)");
+    // Pinned to the shared constant, not a literal: the fingerprint is refreshed
+    // from a live capture (scripts/capture-claude-headers.mjs) on CLI upgrades.
+    expect(headers["User-Agent"]).toBe(`claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`);
+    expect(headers["X-Stainless-Package-Version"]).toBe(CLAUDE_SDK_VERSION);
+    expect(headers["X-Claude-Code-Session-Id"]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("includes heavy-agent beta flags for claude-opus-5", () => {
@@ -38,6 +43,26 @@ describe("DefaultExecutor.buildHeaders() — claude provider", () => {
     const betaFlags = headers["Anthropic-Beta"].split(",").map(s => s.trim());
     expect(betaFlags).toContain("advanced-tool-use-2025-11-20");
     expect(betaFlags).toContain("effort-2025-11-24");
+  });
+
+  it("carries the Claude Code fingerprint on the anthropic api-key provider", () => {
+    const executor = new DefaultExecutor("anthropic");
+    const headers = executor.buildHeaders({ apiKey: "sk-ant-test" }, true, undefined, "claude-opus-5");
+    expect(headers["User-Agent"]).toBe(`claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`);
+    expect(headers["X-App"]).toBe("cli");
+    expect(headers["X-Stainless-Package-Version"]).toBe(CLAUDE_SDK_VERSION);
+    expect(headers["Anthropic-Dangerous-Direct-Browser-Access"]).toBe("true");
+    expect(headers["X-Claude-Code-Session-Id"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(headers["x-api-key"]).toBe("sk-ant-test");
+  });
+
+  it("adds the 1M-context beta only when the [1m] marker was present", () => {
+    const executor = new DefaultExecutor("anthropic");
+    const plain = executor.buildHeaders({ apiKey: "k" }, true, undefined, "claude-opus-5");
+    expect(plain["Anthropic-Beta"]).not.toContain("context-1m-2025-08-07");
+
+    const oneM = executor.buildHeaders({ apiKey: "k", contextMarker: "1m" }, true, undefined, "claude-opus-5");
+    expect(oneM["Anthropic-Beta"]).toContain("context-1m-2025-08-07");
   });
 
   it("includes heavy-agent beta flags for claude-sonnet-5", () => {

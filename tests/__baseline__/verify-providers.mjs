@@ -14,7 +14,22 @@ const ADDED_FIELDS = new Set(["forceStream", "urlSuffix", "retry", "quirks", "au
 
 // Normalize via JSON roundtrip so function/undefined are dropped identically; drop added/removed fields.
 // ADDED_FIELDS are verified by dedicated runtime tests, so drop them from BOTH sides (added or intentionally removed).
-const current = JSON.parse(JSON.stringify(PROVIDERS));
+// The Claude Code fingerprint reports the *host* arch/OS (a real CLI does the
+// same), so these two header values differ per machine. Normalize them on both
+// sides — otherwise the byte-baseline only passes on the machine that wrote it.
+const HOST_DERIVED_HEADERS = ["X-Stainless-Arch", "X-Stainless-OS"];
+function normalizeHostHeaders(providers) {
+  for (const p of Object.values(providers)) {
+    if (!p?.headers) continue;
+    for (const h of HOST_DERIVED_HEADERS) {
+      if (h in p.headers) p.headers[h] = "<host>";
+    }
+  }
+  return providers;
+}
+
+const current = normalizeHostHeaders(JSON.parse(JSON.stringify(PROVIDERS)));
+normalizeHostHeaders(baseline);
 for (const f of ADDED_FIELDS) {
   for (const id of Object.keys(current)) delete current[id][f];
   for (const id of Object.keys(baseline)) delete baseline[id][f];

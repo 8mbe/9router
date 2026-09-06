@@ -1,6 +1,6 @@
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
-import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta } from "../providers/shared.js";
+import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, claudeCodeSessionId } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
@@ -164,9 +164,16 @@ export class DefaultExecutor extends BaseExecutor {
     // a node fronting Kimi or GLM answers on its own ids and never matches, so
     // gateways that would choke on unknown beta flags are left untouched.
     const isClaudeModel = typeof model === "string" && /^claude-/.test(model);
-    if (model && (this.provider === "claude"
+    if (model && (this.provider === "claude" || this.provider === "anthropic"
       || (this.provider?.startsWith?.("anthropic-compatible-") && isClaudeModel))) {
-      headers["Anthropic-Beta"] = selectAnthropicBeta(model);
+      headers["Anthropic-Beta"] = selectAnthropicBeta(model, credentials?.contextMarker);
+    }
+
+    // Claude Code tags every request with a per-session UUID. Providers that
+    // carry the CLI fingerprint need it too, or the identity is incomplete.
+    // A caller-supplied id wins so a forwarded client session stays coherent.
+    if (headers["User-Agent"]?.startsWith?.("claude-cli/") && !headers["X-Claude-Code-Session-Id"]) {
+      headers["X-Claude-Code-Session-Id"] = credentials?.sessionId || claudeCodeSessionId();
     }
 
     // Strip first-party Claude Code identity headers for non-Anthropic anthropic-compatible upstreams

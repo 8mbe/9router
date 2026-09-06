@@ -89,3 +89,5 @@ graphify-out/*
 
 # Kiro local workspace state
 .kiro/
+# Header captures from scripts/capture-claude-headers.mjs (contains live prompt previews)
+capture/

@@ -268,7 +268,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
-      credentials: refreshedCredentials,
+      // Carry the stripped `[1m]` marker to the executor: the 1M-context beta
+      // flag is re-attached to anthropic-beta there, per provider and model.
+      credentials: contextMarker ? { ...refreshedCredentials, contextMarker } : refreshedCredentials,
       log,
       clientRawRequest,
       connectionId: credentials.connectionId,

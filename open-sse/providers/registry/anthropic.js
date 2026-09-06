@@ -1,3 +1,5 @@
+import { CLAUDE_CLI_SPOOF_HEADERS } from "../shared.js";
+
 export default {
   id: "anthropic",
   priority: 30,
@@ -16,9 +18,23 @@ export default {
   transport: {
     baseUrl: "https://api.anthropic.com/v1/messages",
     format: "claude",
-    headers: {
-      "anthropic-version": "2023-06-01",
-      "Anthropic-Beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+    // Claude Code posts to /v1/messages?beta=true; the beta features it asks
+    // for in Anthropic-Beta are only honoured on that path.
+    urlSuffix: "?beta=true",
+    // Present as the Claude Code CLI. The fingerprint is captured from a live
+    // client by scripts/capture-claude-headers.mjs — see providers/shared.js.
+    // Anthropic-Beta here is the static fallback; default.js recomputes it
+    // per-model (heavy-agent + 1M-context flags) in buildHeaders().
+    headers: { ...CLAUDE_CLI_SPOOF_HEADERS },
+    auth: {
+      apiKey: {
+        header: "x-api-key",
+        scheme: "raw",
+      },
+      oauth: {
+        header: "Authorization",
+        scheme: "bearer",
+      },
     },
   },
   models: [

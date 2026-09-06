@@ -31,6 +31,11 @@ function sanitize(headers) {
       ? v.replace(/Bearer .+/, "Bearer <TOK>")
           .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
           .replace(/kimi-\d{10,}/g, "kimi-<TS>")
+          // Per-process session UUID (Claude Code fingerprint) — varies every run.
+          .replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "<SESSION>")
+          // Host-derived Stainless arch/OS — varies per machine.
+          .replace(/^(x64|arm64|x86|other::.+)$/, k === "X-Stainless-Arch" ? "<HOST>" : "$1")
+          .replace(/^(MacOS|Windows|Linux|FreeBSD|Other::.+)$/, k === "X-Stainless-OS" ? "<HOST>" : "$1")
       : v;
   }
   return out;
