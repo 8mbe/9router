@@ -102,64 +102,78 @@ function classifyAnthropic(res, parsed, rawText) {
 }
 
 /**
- * Send one real completion to `modelId` using this connection's own credentials.
- *
- * Deliberately bypasses /v1/chat/completions: the router's account fallback would
- * silently retry on another connection, so a green result would not tell you which
- * key actually works. A key that is valid for one model and rejected for another is
- * exactly what this has to distinguish, so the request goes straight to the
- * connection's base URL with that connection's key.
+ * Resolve the completion URL for a probe. Base URLs arrive in both shapes: a saved
+ * compatible node stores the bare root, while PROVIDERS transports store the full
+ * endpoint — appending blindly would produce /chat/completions/chat/completions.
  */
-export async function probeConnectionModel(connection, modelId, options = {}) {
+function completionUrl(baseUrl, format) {
+  const base = normalizeBase(baseUrl);
+  if (format === "claude") return anthropicMessagesUrl(base);
+  if (base.endsWith("/chat/completions")) return base;
+  return `${base}/chat/completions`;
+}
+
+/**
+ * Send one real completion to `model` at an explicit endpoint.
+ *
+ * Shared by the saved-connection probe and the pre-save "Check Model" button on the
+ * add-key modal, so a model gets the same verdict before and after it is stored.
+ * `format` is the transport format ("openai" | "claude"); anything else is the
+ * caller's job to map first.
+ */
+export async function probeModelEndpoint({
+  baseUrl,
+  apiKey = "",
+  model,
+  format = "openai",
+  headers: extraHeaders,
+  authHeader,
+  proxy,
+  signal,
+}) {
   const start = Date.now();
-  const baseUrl = connection?.providerSpecificData?.baseUrl;
-  if (!baseUrl) {
-    return { ok: false, error: "Connection has no base URL", latencyMs: 0, status: null };
-  }
-  if (!modelId) {
-    return { ok: false, error: "No model id", latencyMs: 0, status: null };
-  }
+  if (!baseUrl) return { ok: false, error: "No base URL", latencyMs: 0, status: null };
+  if (!model) return { ok: false, error: "No model id", latencyMs: 0, status: null };
 
-  const effectiveProxy = options.proxy !== undefined
-    ? options.proxy
-    : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
-
-  const isAnthropic = isAnthropicCompatibleProvider(connection.provider);
-  const apiKey = connection.apiKey || connection.accessToken || "";
+  const isAnthropic = format === "claude";
+  const url = completionUrl(baseUrl, format);
 
   try {
     let res;
     if (isAnthropic) {
-      res = await probeFetch(anthropicMessagesUrl(baseUrl), {
+      res = await probeFetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          ...(extraHeaders || {}),
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: modelId,
+          model,
           max_tokens: PROBE_MAX_TOKENS,
           messages: [{ role: "user", content: "hi" }],
         }),
-        signal: options.signal,
-      }, effectiveProxy);
+        signal,
+      }, proxy);
     } else {
-      res = await probeFetch(`${normalizeBase(baseUrl)}/chat/completions`, {
+      const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
+      if (apiKey) {
+        if (authHeader === "x-api-key") headers["X-API-Key"] = apiKey;
+        else headers["Authorization"] = `Bearer ${apiKey}`;
+      }
+      res = await probeFetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
-          model: modelId,
+          model,
           max_tokens: PROBE_MAX_TOKENS,
           stream: false,
           messages: [{ role: "user", content: "hi" }],
         }),
-        signal: options.signal,
-      }, effectiveProxy);
+        signal,
+      }, proxy);
     }
 
     const latencyMs = Date.now() - start;
@@ -186,6 +200,35 @@ export async function probeConnectionModel(connection, modelId, options = {}) {
       latencyMs,
     };
   }
+}
+
+/**
+ * Send one real completion to `modelId` using this connection's own credentials.
+ *
+ * Deliberately bypasses /v1/chat/completions: the router's account fallback would
+ * silently retry on another connection, so a green result would not tell you which
+ * key actually works. A key that is valid for one model and rejected for another is
+ * exactly what this has to distinguish, so the request goes straight to the
+ * connection's base URL with that connection's key.
+ */
+export async function probeConnectionModel(connection, modelId, options = {}) {
+  const baseUrl = connection?.providerSpecificData?.baseUrl;
+  if (!baseUrl) {
+    return { ok: false, error: "Connection has no base URL", latencyMs: 0, status: null };
+  }
+
+  const effectiveProxy = options.proxy !== undefined
+    ? options.proxy
+    : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+
+  return probeModelEndpoint({
+    baseUrl,
+    apiKey: connection.apiKey || connection.accessToken || "",
+    model: modelId,
+    format: isAnthropicCompatibleProvider(connection.provider) ? "claude" : "openai",
+    proxy: effectiveProxy,
+    signal: options.signal,
+  });
 }
 
 /**

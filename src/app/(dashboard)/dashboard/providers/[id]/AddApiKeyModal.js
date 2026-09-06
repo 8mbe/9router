@@ -41,6 +41,11 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
+  // Separate from validationResult: the key can be accepted while the model the user
+  // typed is rejected (wrong id, no access, not served by this gateway), and the two
+  // failures need different fixes — so they get their own state and their own badge.
+  const [modelChecking, setModelChecking] = useState(false);
+  const [modelResult, setModelResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const bulkPlaceholder = isCloudflareAi
     ? `name1|sk-key1|acc123456\nname2|sk-key2|def789012\nsk-key-only-auto-named`
@@ -73,20 +78,55 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     return undefined;
   };
 
-  const handleValidate = async () => {
-    setValidating(true);
+  const runKeyCheck = async () => {
     try {
       const res = await fetch("/api/providers/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, apiKey: formData.apiKey, providerSpecificData: buildProviderSpecificData() }),
       });
-      const data = await res.json();
-      setValidationResult(data.valid ? "success" : "failed");
+      const data = await res.json().catch(() => ({}));
+      return !!data.valid;
     } catch {
-      setValidationResult("failed");
+      return false;
+    }
+  };
+
+  // One real completion against the model the user typed. Returns null when no model
+  // was entered — the field is optional, so "not checked" must stay distinct from
+  // "checked and failed".
+  const runModelCheck = async () => {
+    const model = formData.defaultModel.trim();
+    if (!model) return null;
+    try {
+      const res = await fetch("/api/providers/validate-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, apiKey: formData.apiKey, model, providerSpecificData: buildProviderSpecificData() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.error && data.ok === undefined) return { ok: false, supported: true, error: data.error };
+      return { ok: !!data.ok, supported: data.supported !== false, error: data.error || null, note: data.note || null, latencyMs: data.latencyMs ?? null };
+    } catch {
+      return { ok: false, supported: true, error: "Model check failed to run" };
+    }
+  };
+
+  const handleValidate = async () => {
+    setValidating(true);
+    try {
+      setValidationResult(await runKeyCheck() ? "success" : "failed");
     } finally {
       setValidating(false);
+    }
+  };
+
+  const handleValidateModel = async () => {
+    setModelChecking(true);
+    try {
+      setModelResult(await runModelCheck());
+    } finally {
+      setModelChecking(false);
     }
   };
 
@@ -97,27 +137,30 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       // Non-ollama providers require a name
       if (!formData.name) return;
     }
-    if (isCompatible && !formData.defaultModel.trim()) return;
 
     setSaving(true);
     try {
-      let isValid = false;
-      try {
-        setValidating(true);
-        setValidationResult(null);
-        const res = await fetch("/api/providers/validate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider, apiKey: formData.apiKey, providerSpecificData: buildProviderSpecificData() }),
-        });
-        const data = await res.json();
-        isValid = !!data.valid;
-        setValidationResult(isValid ? "success" : "failed");
-      } catch {
-        setValidationResult("failed");
-      } finally {
-        setValidating(false);
+      setValidating(true);
+      setValidationResult(null);
+      setModelResult(null);
+      const isValid = await runKeyCheck();
+      setValidationResult(isValid ? "success" : "failed");
+      setValidating(false);
+
+      // Only worth a completion once the key itself was accepted — otherwise the
+      // model check would just re-report the same 401.
+      let modelCheck = null;
+      if (isValid) {
+        setModelChecking(true);
+        modelCheck = await runModelCheck();
+        setModelResult(modelCheck);
+        setModelChecking(false);
       }
+
+      // A model the user named that does not answer is not a working connection, so
+      // it stays "unknown" until a later test proves otherwise. A provider that
+      // cannot be model-probed at all does not count against the key.
+      const modelOk = !modelCheck || modelCheck.ok || modelCheck.supported === false;
 
       await onSave({
         name: formData.name || (isOllamaLocal ? "Ollama Local" : ""),
@@ -125,10 +168,12 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         defaultModel: isCompatible ? formData.defaultModel.trim() : undefined,
         priority: formData.priority,
         proxyPoolId: formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? null : formData.proxyPoolId,
-        testStatus: isValid ? "active" : "unknown",
+        testStatus: isValid && modelOk ? "active" : "unknown",
         providerSpecificData: buildProviderSpecificData()
       });
     } finally {
+      setValidating(false);
+      setModelChecking(false);
       setSaving(false);
     }
   };
@@ -293,29 +338,60 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           />
         )}
         {isCompatible && (
-          <Input
-            label="Default Model"
-            value={formData.defaultModel}
-            onChange={(e) => setFormData({ ...formData, defaultModel: e.target.value })}
-            placeholder={isAnthropic ? "claude-3-5-sonnet-latest" : "gpt-4o-mini"}
-          />
+          <div className="flex gap-2">
+            <Input
+              label="Default Model (optional)"
+              value={formData.defaultModel}
+              onChange={(e) => { setFormData({ ...formData, defaultModel: e.target.value }); setModelResult(null); }}
+              placeholder={isAnthropic ? "claude-3-5-sonnet-latest" : "gpt-4o-mini"}
+              className="flex-1"
+            />
+            <div className="pt-6">
+              <Button
+                onClick={handleValidateModel}
+                disabled={!formData.defaultModel.trim() || (!formData.apiKey && !isOllamaLocal) || modelChecking || saving}
+                variant="secondary"
+              >
+                {modelChecking ? "Checking..." : "Check Model"}
+              </Button>
+            </div>
+          </div>
         )}
         {isOllamaLocal && (
           <p className="text-xs text-text-muted">
             Leave blank to use <code>http://localhost:11434</code>. For remote Ollama, enter the full host URL (e.g. <code>http://192.168.1.10:11434</code>).
           </p>
         )}
-        {validationResult && (
-          <Badge variant={validationResult === "success" ? "success" : "error"}>
-            {validationResult === "success" ? "Valid" : "Invalid"}
-          </Badge>
+        {(validationResult || modelResult) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {validationResult && (
+              <Badge variant={validationResult === "success" ? "success" : "error"}>
+                {validationResult === "success" ? "Key valid" : "Key invalid"}
+              </Badge>
+            )}
+            {modelResult && (
+              <Badge variant={modelResult.ok ? "success" : (modelResult.supported === false ? "warning" : "error")}>
+                {modelResult.ok
+                  ? `Model responded${modelResult.latencyMs ? ` (${modelResult.latencyMs}ms)` : ""}`
+                  : modelResult.supported === false
+                    ? "Model check unavailable"
+                    : "Model failed"}
+              </Badge>
+            )}
+          </div>
+        )}
+        {modelResult && !modelResult.ok && modelResult.error && (
+          <p className="text-xs text-yellow-400 break-words">{modelResult.error}</p>
+        )}
+        {modelResult?.ok && modelResult.note && (
+          <p className="text-xs text-text-muted break-words">{modelResult.note}</p>
         )}
         {error && (
           <p className="text-xs text-red-500 break-words">{error}</p>
         )}
         {isCompatible && (
           <p className="text-xs text-text-muted">
-            Enter the model ID exactly as your compatible endpoint expects it. This model will be saved as the connection default.
+            Optional. Enter the model ID exactly as your compatible endpoint expects it — it is saved as the connection default, and &quot;Check Model&quot; sends one short completion to confirm it answers.
           </p>
         )}
         {isCloudflareAi && (
@@ -393,7 +469,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         </p>
 
         <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isCompatible && !formData.defaultModel.trim()) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
+          <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !formData.apiKey)) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
             {saving ? "Saving..." : "Save"}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>
