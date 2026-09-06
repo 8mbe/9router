@@ -112,6 +112,7 @@ export default function RequestDetailsTab() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
+  const [payloadsRedacted, setPayloadsRedacted] = useState(false);
   const [filters, setFilters] = useState({
     provider: "",
     startDate: "",
@@ -146,6 +147,7 @@ export default function RequestDetailsTab() {
       const data = await res.json();
 
       setDetails(data.details || []);
+      setPayloadsRedacted(data.redacted === true);
       setPagination(prev => ({ ...prev, ...data.pagination }));
     } catch (error) {
       console.error("Failed to fetch request details:", error);
@@ -456,6 +458,17 @@ export default function RequestDetailsTab() {
             )}
 
             <div className="space-y-4">
+              {payloadsRedacted && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                  <span className="material-symbols-outlined text-[16px] flex-shrink-0">visibility_off</span>
+                  <span>
+                    Conversation payloads are hidden because this request could not be attributed to a
+                    signed-in session. Sign in to the dashboard, or open it from the machine running
+                    9Router, to see the full request and response bodies.
+                  </span>
+                </div>
+              )}
+
               <CollapsibleSection title="1. Client Request (Input)" defaultOpen={true} icon="input">
                 <pre className="max-h-[300px] max-w-full overflow-auto rounded-lg border border-black/5 bg-black/5 p-3 font-mono text-xs text-text-main dark:border-white/5 dark:bg-white/5 sm:p-4">
                   {JSON.stringify(selectedDetail.request, null, 2)}
