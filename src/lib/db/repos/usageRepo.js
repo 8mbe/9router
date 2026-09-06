@@ -658,6 +658,127 @@ export async function getUsageStats(period = "all") {
   return stats;
 }
 
+function emptySpend() {
+  return { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0 };
+}
+
+function addSpend(target, values) {
+  target.requests += values.requests || 0;
+  target.promptTokens += values.promptTokens || 0;
+  target.completionTokens += values.completionTokens || 0;
+  target.cachedTokens += values.cachedTokens || 0;
+  target.cost += values.cost || 0;
+}
+
+function dateKeyDaysAgo(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return getLocalDateKey(d.toISOString());
+}
+
+/**
+ * Money spent per API key, rolled up across every model/provider that key touched.
+ *
+ * Windows come from two sources on purpose: `total`/`last7d`/`last30d` are summed
+ * from usageDaily (durable day buckets, so they survive history trimming but are
+ * day-granular), while `last24h` is summed from usageHistory for an exact rolling
+ * window. `lastUsed` is the precise timestamp from history.
+ *
+ * Cost is whatever saveRequestUsage priced the request at — providers with no
+ * pricing entry contribute requests/tokens but $0.
+ */
+export async function getApiKeySpend() {
+  const db = await getAdapter();
+
+  let allKeys = [];
+  try {
+    const { getApiKeys } = await import("./apiKeysRepo.js");
+    allKeys = await getApiKeys();
+  } catch {}
+
+  const buckets = {};
+  const bucketFor = (rawKey) => {
+    if (!buckets[rawKey]) {
+      buckets[rawKey] = {
+        total: emptySpend(), last24h: emptySpend(), last7d: emptySpend(), last30d: emptySpend(),
+        lastUsed: null,
+      };
+    }
+    return buckets[rawKey];
+  };
+
+  // Durable day buckets → total / 7d / 30d
+  const cutoff7 = dateKeyDaysAgo(6);
+  const cutoff30 = dateKeyDaysAgo(29);
+  const dayRows = db.all(`SELECT dateKey, data FROM usageDaily`);
+  for (const dr of dayRows) {
+    const day = parseJson(dr.data, {}) || {};
+    for (const [akModelKey, v] of Object.entries(day.byApiKey || {})) {
+      // meta.apiKey is authoritative; the composite key is `${apiKey}|${model}|${provider}`
+      const rawKey = typeof v?.apiKey === "string" && v.apiKey ? v.apiKey : akModelKey.split("|")[0];
+      const b = bucketFor(rawKey);
+      addSpend(b.total, v);
+      if (dr.dateKey >= cutoff7) addSpend(b.last7d, v);
+      if (dr.dateKey >= cutoff30) addSpend(b.last30d, v);
+    }
+  }
+
+  // Exact rolling 24h from history
+  const since24h = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
+  const recentRows = db.all(
+    `SELECT apiKey, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+    [since24h]
+  );
+  for (const r of recentRows) {
+    const t = parseJson(r.tokens, {}) || {};
+    const rawKey = r.apiKey && typeof r.apiKey === "string" ? r.apiKey : "local-no-key";
+    addSpend(bucketFor(rawKey).last24h, {
+      requests: 1,
+      promptTokens: r.promptTokens || 0,
+      completionTokens: r.completionTokens || 0,
+      cachedTokens: t.cached_tokens || t.cache_read_input_tokens || 0,
+      cost: r.cost || 0,
+    });
+  }
+
+  // Precise lastUsed per key
+  const lastRows = db.all(`SELECT apiKey, MAX(timestamp) AS lastUsed FROM usageHistory GROUP BY apiKey`);
+  for (const r of lastRows) {
+    const rawKey = r.apiKey && typeof r.apiKey === "string" ? r.apiKey : "local-no-key";
+    const b = bucketFor(rawKey);
+    if (!b.lastUsed || r.lastUsed > b.lastUsed) b.lastUsed = r.lastUsed;
+  }
+
+  const known = new Set(allKeys.map((k) => k.key));
+  const shape = (rawKey, extra) => {
+    const b = buckets[rawKey] || {
+      total: emptySpend(), last24h: emptySpend(), last7d: emptySpend(), last30d: emptySpend(), lastUsed: null,
+    };
+    return { ...extra, apiKeyMasked: maskApiKey(rawKey), lastUsed: b.lastUsed, spend: {
+      total: b.total, last24h: b.last24h, last7d: b.last7d, last30d: b.last30d,
+    } };
+  };
+
+  const keys = allKeys.map((k) =>
+    shape(k.key, { id: k.id, name: k.name, isActive: k.isActive, createdAt: k.createdAt })
+  );
+
+  // Usage attributed to keys that no longer exist (deleted after spending money)
+  const deleted = Object.keys(buckets)
+    .filter((rawKey) => rawKey !== "local-no-key" && !known.has(rawKey))
+    .map((rawKey) => shape(rawKey, { id: null, name: null, isActive: false, createdAt: null }));
+
+  // Requests that arrived without a key (local calls, or "require API key" off)
+  const unattributed = shape("local-no-key", { id: null, name: "Local (No API Key)", isActive: null, createdAt: null });
+
+  const totals = { total: emptySpend(), last24h: emptySpend(), last7d: emptySpend(), last30d: emptySpend() };
+  for (const entry of [...keys, ...deleted, unattributed]) {
+    for (const w of ["total", "last24h", "last7d", "last30d"]) addSpend(totals[w], entry.spend[w]);
+  }
+
+  return { keys, deleted, unattributed, totals };
+}
+
 export async function getChartData(period = "7d") {
   const db = await getAdapter();
   const now = Date.now();

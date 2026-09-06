@@ -19,6 +19,8 @@ import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
+  const [keySpend, setKeySpend] = useState(null);
+  const [spendWindow, setSpendWindow] = useState("total");
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
@@ -256,9 +258,10 @@ export default function APIPageClient({ machineId }) {
   const fetchData = async () => {
     try {
       const fetchKeys = async () => {
-        const res = await fetch("/api/keys");
+        const res = await fetch("/api/keys?spend=1");
         if (!res.ok) return [];
         const data = await res.json();
+        setKeySpend(data.spend || null);
         return data.keys || [];
       };
 
@@ -682,6 +685,24 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  // Sub-cent spend would render as "$0.00" and read as "unused", so keep 4 decimals
+  // until the amount is large enough for 2 to be meaningful.
+  const fmtMoney = (n) => {
+    const v = n || 0;
+    if (v === 0) return "$0.00";
+    if (v < 0.01) return `$${v.toFixed(4)}`;
+    return `$${v.toFixed(2)}`;
+  };
+
+  const fmtCount = (n) => (n || 0).toLocaleString();
+
+  const SPEND_WINDOWS = [
+    { id: "total", label: "All time" },
+    { id: "last30d", label: "30d" },
+    { id: "last7d", label: "7d" },
+    { id: "last24h", label: "24h" },
+  ];
+
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
@@ -975,6 +996,43 @@ export default function APIPageClient({ machineId }) {
           </Button>
         </div>
 
+        {keySpend?.totals && (
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-border">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-text-muted">Spent through API keys</p>
+              <p className="text-2xl font-semibold tabular-nums">
+                {fmtMoney(keySpend.totals[spendWindow]?.cost)}
+              </p>
+              <p className="text-xs text-text-muted mt-0.5">
+                {fmtCount(keySpend.totals[spendWindow]?.requests)} requests
+                {" · "}
+                {fmtCount(
+                  (keySpend.totals[spendWindow]?.promptTokens || 0) +
+                    (keySpend.totals[spendWindow]?.completionTokens || 0)
+                )} tokens
+                {keySpend.unattributed?.spend?.[spendWindow]?.cost > 0 && (
+                  <> · {fmtMoney(keySpend.unattributed.spend[spendWindow].cost)} without a key</>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.03] p-1">
+              {SPEND_WINDOWS.map((w) => (
+                <button
+                  key={w.id}
+                  onClick={() => setSpendWindow(w.id)}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    spendWindow === w.id
+                      ? "bg-bg text-text-main shadow-sm font-medium"
+                      : "text-text-muted hover:text-text-main"
+                  }`}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between pb-4 mb-4 border-b border-border">
           <div>
             <p className="font-medium">Require API key</p>
@@ -1038,12 +1096,30 @@ export default function APIPageClient({ machineId }) {
                   </div>
                   <p className="text-xs text-text-muted mt-1">
                     Created {new Date(key.createdAt).toLocaleDateString()}
+                    {key.lastUsed && (
+                      <> · Last used {new Date(key.lastUsed).toLocaleDateString()}</>
+                    )}
                   </p>
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  {key.spend && (
+                    <div className="text-right shrink-0">
+                      <p
+                        className="text-sm font-semibold tabular-nums"
+                        title={SPEND_WINDOWS.map(
+                          (w) => `${w.label}: ${fmtMoney(key.spend[w.id]?.cost)}`
+                        ).join("\n")}
+                      >
+                        {fmtMoney(key.spend[spendWindow]?.cost)}
+                      </p>
+                      <p className="text-xs text-text-muted">
+                        {fmtCount(key.spend[spendWindow]?.requests)} req
+                      </p>
+                    </div>
+                  )}
                   <Toggle
                     size="sm"
                     checked={key.isActive ?? true}
