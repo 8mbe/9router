@@ -543,15 +543,56 @@ export default function ProviderDetailPage() {
           ...(contextLength !== undefined ? { contextLength } : {}),
         }),
       });
+      const data = await res.json().catch(() => null);
       if (res.ok) {
-        await fetchCustomModels();
+        // The POST already answers with the resulting list, so a follow-up GET would
+        // just be a second round trip for data we are holding.
+        if (Array.isArray(data?.models)) setCustomModels(data.models);
+        else await fetchCustomModels();
         if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("customModelChanged"));
       } else {
-        const data = await res.json();
-        alert(data.error || "Failed to add custom model");
+        alert(data?.error || "Failed to add custom model");
       }
     } catch (error) {
       console.log("Error adding custom model:", error);
+    }
+  };
+
+  /**
+   * Add many models in one request. Importing a provider's whole list one model at a
+   * time meant two serialized round trips per model (POST + refetch), which is what
+   * made a 300-model aggregator import take minutes.
+   * `entries` is [{ id, type?, providerAlias?, caps?, contextLength? }].
+   */
+  const handleAddCustomModels = async (entries) => {
+    const models = (entries || [])
+      .filter((entry) => entry?.id)
+      .map(({ id, type, providerAlias, caps, contextLength }) => ({
+        providerAlias: providerAlias || providerStorageAlias,
+        id,
+        type: type || "llm",
+        ...(caps ? { caps } : {}),
+        ...(contextLength !== undefined ? { contextLength } : {}),
+      }));
+    if (models.length === 0) return 0;
+    try {
+      const res = await fetch("/api/models/custom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ models }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        alert(data?.error || "Failed to add models");
+        return 0;
+      }
+      if (Array.isArray(data?.models)) setCustomModels(data.models);
+      else await fetchCustomModels();
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("customModelChanged"));
+      return data?.added ?? models.length;
+    } catch (error) {
+      console.log("Error adding custom models:", error);
+      return 0;
     }
   };
 
@@ -591,24 +632,25 @@ export default function ProviderDetailPage() {
         return;
       }
 
-      let importedCount = 0;
+      const pending = [];
+      const seen = new Set();
       for (const model of models) {
         const modelId = model.id || model.name;
         if (!modelId) continue;
-        
+
         // Qoder model ID format may be "qoder/auto" or "auto", need to remove prefix
         const cleanModelId = modelId.replace(/^qoder\//, "");
         const alreadyExists = customModels.some(
           (entry) => entry.providerAlias === providerStorageAlias && entry.id === cleanModelId && (entry.kind || entry.type || "llm") === "llm"
         ) || Object.values(modelAliases).includes(`${providerStorageAlias}/${cleanModelId}`);
-        if (alreadyExists) {
-          continue;
-        }
+        if (alreadyExists || seen.has(cleanModelId)) continue;
 
-        await handleAddCustomModel(cleanModelId, "llm", providerStorageAlias);
-        importedCount += 1;
+        seen.add(cleanModelId);
+        pending.push({ id: cleanModelId, type: "llm" });
       }
-      
+
+      const importedCount = pending.length === 0 ? 0 : await handleAddCustomModels(pending);
+
       if (importedCount === 0) {
         alert(translate("All models already exist, no new models added"));
       } else {
@@ -1105,6 +1147,7 @@ export default function ProviderDetailPage() {
           onSetAlias={handleSetAlias}
           onDeleteAlias={handleDeleteAlias}
           onAddCustomModel={(modelId, extra) => handleAddCustomModel(modelId, "llm", providerStorageAlias, undefined, extra?.contextLength)}
+          onAddCustomModels={handleAddCustomModels}
           onDeleteCustomModel={(modelId) => handleDeleteCustomModel(modelId, "llm", providerStorageAlias)}
           connections={connections}
           isAnthropic={isAnthropicCompatible}

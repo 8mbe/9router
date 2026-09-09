@@ -162,7 +162,11 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
         body: JSON.stringify({ providerAlias, id: modelId, type: effectiveType }),
       });
       if (res.ok) {
-        await fetchData();
+        // The POST answers with the resulting list; adding a model never changes
+        // aliases, so refetching both is a wasted round trip.
+        const data = await res.json().catch(() => null);
+        if (Array.isArray(data?.models)) setCustomModels(data.models);
+        else await fetchData();
         window.dispatchEvent(new CustomEvent("customModelChanged"));
       }
     } catch (e) { console.log("add custom model error:", e); }

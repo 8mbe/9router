@@ -237,7 +237,7 @@ CompatibleModelRow.propTypes = {
 
 export default function CompatibleModelsSection({
   providerStorageAlias, providerDisplayAlias, modelAliases, customModels,
-  copied, onCopy, onDeleteAlias, onAddCustomModel, onDeleteCustomModel,
+  copied, onCopy, onDeleteAlias, onAddCustomModel, onAddCustomModels, onDeleteCustomModel,
   connections, isAnthropic, searchQuery = "",
 }) {
   const [newModel, setNewModel] = useState("");
@@ -471,7 +471,7 @@ export default function CompatibleModelsSection({
         return;
       }
       const existing = new Set(allModels.map((entry) => entry.id));
-      let importedCount = 0;
+      const pending = [];
       let contextCount = 0;
       for (const model of models) {
         const modelId = model.id || model.name || model.model;
@@ -480,10 +480,22 @@ export default function CompatibleModelsSection({
         // it is read here rather than re-fetched later.
         const contextLength = extractContextLength(model);
         if (contextLength !== null) contextCount += 1;
-        await onAddCustomModel(modelId, { contextLength });
         existing.add(modelId);
-        importedCount += 1;
+        pending.push({ id: modelId, contextLength });
       }
+
+      // One request for the whole list. Adding them one at a time cost two serialized
+      // round trips per model, so a large aggregator list took minutes.
+      let importedCount = 0;
+      if (pending.length > 0 && onAddCustomModels) {
+        importedCount = await onAddCustomModels(pending);
+      } else {
+        for (const entry of pending) {
+          await onAddCustomModel(entry.id, { contextLength: entry.contextLength });
+          importedCount += 1;
+        }
+      }
+
       if (importedCount === 0) {
         alert("No new models were added.");
       } else {
@@ -636,6 +648,7 @@ CompatibleModelsSection.propTypes = {
   onCopy: PropTypes.func.isRequired,
   onDeleteAlias: PropTypes.func.isRequired,
   onAddCustomModel: PropTypes.func.isRequired,
+  onAddCustomModels: PropTypes.func,
   onDeleteCustomModel: PropTypes.func.isRequired,
   connections: PropTypes.arrayOf(PropTypes.shape({
     id: PropTypes.string,

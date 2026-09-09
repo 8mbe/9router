@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCustomModels, addCustomModel, deleteCustomModel } from "@/models";
+import { getCustomModels, addCustomModel, addCustomModels, deleteCustomModel } from "@/models";
 import { CAPACITY_META } from "@/shared/constants/models";
 import { normalizeContextLength } from "@/lib/modelProbe/contextLength";
 
@@ -26,27 +26,48 @@ export async function GET() {
   }
 }
 
-// POST /api/models/custom - Add custom model
+// Absent contextLength = leave any stored window alone; explicit null = clear it.
+// An unparseable value is treated as "clear" rather than silently stored.
+function normalizeEntry(raw) {
+  const { providerAlias, id, type, name, caps, contextLength } = raw || {};
+  if (!providerAlias || !id) return null;
+  const cleanCaps = sanitizeCaps(caps);
+  const hasContext = contextLength !== undefined;
+  return {
+    providerAlias,
+    id,
+    type: type || "llm",
+    name,
+    ...(cleanCaps ? { caps: cleanCaps } : {}),
+    ...(hasContext ? { contextLength: normalizeContextLength(contextLength) } : {}),
+  };
+}
+
+// POST /api/models/custom - Add one custom model, or a batch via `models: [...]`
+//
+// The batch form exists because importing an aggregator's model list used to fire one
+// request (and one transaction) per model. Both forms return the full resulting list
+// so the caller does not need a follow-up GET to refresh its state.
 export async function POST(request) {
   try {
-    const { providerAlias, id, type, name, caps, contextLength } = await request.json();
-    if (!providerAlias || !id) {
+    const body = await request.json();
+    const batch = Array.isArray(body?.models) ? body.models : null;
+
+    if (batch) {
+      const entries = batch.map(normalizeEntry).filter(Boolean);
+      if (entries.length === 0) {
+        return NextResponse.json({ error: "models[] must contain entries with providerAlias and id" }, { status: 400 });
+      }
+      const added = await addCustomModels(entries);
+      return NextResponse.json({ success: true, added, models: await getCustomModels() });
+    }
+
+    const entry = normalizeEntry(body);
+    if (!entry) {
       return NextResponse.json({ error: "providerAlias and id required" }, { status: 400 });
     }
-    const cleanCaps = sanitizeCaps(caps);
-    // Absent = leave any stored window alone; explicit null = clear it. An
-    // unparseable value is treated as "clear" rather than silently stored.
-    const hasContext = contextLength !== undefined;
-    const cleanContext = hasContext ? normalizeContextLength(contextLength) : undefined;
-    const added = await addCustomModel({
-      providerAlias,
-      id,
-      type: type || "llm",
-      name,
-      ...(cleanCaps ? { caps: cleanCaps } : {}),
-      ...(hasContext ? { contextLength: cleanContext } : {}),
-    });
-    return NextResponse.json({ success: true, added });
+    const added = await addCustomModel(entry);
+    return NextResponse.json({ success: true, added, models: await getCustomModels() });
   } catch (error) {
     console.log("Error adding custom model:", error);
     return NextResponse.json({ error: "Failed to add custom model" }, { status: 500 });
