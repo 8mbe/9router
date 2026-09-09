@@ -11,6 +11,7 @@ Free tier providers are your **fallback** when subscription and cheap quota exha
 - 🆓 **iFlow** - 8 models FREE (Kimi K2, Qwen3, GLM 4.7, MiniMax M2...)
 - 🆓 **Qwen** - 3 models FREE (Qwen3 Coder Plus/Flash, Vision)
 - 🆓 **Kiro** - 2 models FREE (Claude Sonnet 4.5, Haiku 4.5)
+- 🆓 **Cline Free** - 17 models FREE (Nemotron 3 Ultra, Nex N2.5, Inkling, Laguna, Gemma 4...)
 
 **Strategy:** Use as emergency backup. Unlimited usage, zero cost forever!
 
@@ -181,6 +182,78 @@ Model: kr/claude-sonnet-4.5
 
 ---
 
+## Cline Free (17 FREE Models)
+
+Cline's zero-cost model pool, reached through your Cline account. Same endpoint and
+OAuth login as the paid `cline` / `clinepass` providers, but scoped to models that
+cost nothing.
+
+### Pricing
+
+| Plan | Monthly Cost | Models | Quota |
+|------|--------------|--------|-------|
+| FREE | $0 | 17 models (live list) | Rate-limited by Cline |
+
+**Note:** Cline controls this list and its limits, and both change without notice.
+9Router discovers the current set from Cline's own catalog at runtime; the bundled
+list is only the fallback for when that lookup fails.
+
+### Setup
+
+**Step 1: Connect via Dashboard**
+
+```bash
+9router
+# Dashboard → Providers → Connect Cline Free
+```
+
+**Step 2: Cline OAuth Login**
+
+- Click "Connect Cline Free"
+- Browser opens → Cline login page (app.cline.bot)
+- Create account or login
+- Auto token refresh enabled
+
+An API key works too (Providers → Cline Free → Add API Key). A Cline account can be
+connected to `cline`, `clinepass` and `cline-free` at the same time — each gets its
+own connection, quota tracking and combo slot, so free traffic never mixes with paid.
+
+**Step 3: Use in CLI**
+
+```
+Model: clf/nvidia/nemotron-3-ultra-550b-a55b:free
+       clf/nex-agi/nex-n2.5-pro:free
+       clf/thinkingmachines/inkling:free
+```
+
+### Available Models
+
+Live list — run `/v1/models` (or open the provider page) to see what your account
+currently has. The bundled fallback covers:
+
+| Model ID | Description | Best For |
+|----------|-------------|----------|
+| `clf/nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron 3 Ultra 550B | Highest quality |
+| `clf/nvidia/nemotron-3-super-120b-a12b:free` | Nemotron 3 Super 120B | Balanced |
+| `clf/nex-agi/nex-n2.5-pro:free` | Nex N2.5 Pro | General coding |
+| `clf/nex-agi/nex-n2.5-mini:free` | Nex N2.5 Mini | Fast responses |
+| `clf/thinkingmachines/inkling:free` | Inkling | General chat |
+| `clf/poolside/laguna-s-2.1:free` | Laguna S 2.1 | Coding |
+| `clf/cohere/north-mini-code:free` | North Mini Code | Coding |
+| `clf/google/gemma-4-31b-it:free` | Gemma 4 31B | Lightweight tasks |
+
+Plus Ling 3.0 Flash, Nemotron 3.5 Lightning, Nemotron 3 Nano Omni Reasoning,
+Gemma 4 26B, Dots 3 Note Preview and LFM 2.5.
+
+### Pro Tips
+
+- **Same account as ClinePass** - one Cline login covers paid and free
+- **Fallback tier** - put `clf/*` last in a combo, not first; the limits are tight
+- **List rotates** - Cline adds and removes free models often, so prefer live discovery over hardcoding
+- **`:free` suffix is load-bearing** - it is what marks the model zero-cost upstream; don't strip it
+
+---
+
 ## Feature Comparison
 
 | Provider | Models | Best Model | Setup | Quota |
@@ -188,6 +261,7 @@ Model: kr/claude-sonnet-4.5
 | **iFlow** | 8 | Kimi K2 Thinking | OAuth | Unlimited |
 | **Qwen** | 3 | Qwen3 Coder Plus | Device Code | Unlimited |
 | **Kiro** | 2 | Claude Sonnet 4.5 | AWS Builder ID | Unlimited |
+| **Cline Free** | 17 | Nemotron 3 Ultra 550B | OAuth / API key | Rate-limited |
 
 **Winner:** iFlow for variety, Kiro for quality!
 

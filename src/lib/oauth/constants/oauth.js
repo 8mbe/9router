@@ -108,6 +108,9 @@ export const CLINE_CONFIG = { ...PROVIDER_OAUTH["cline"] };
 // ClinePass OAuth Configuration (shares Cline's OAuth endpoints)
 export const CLINEPASS_CONFIG = { ...PROVIDER_OAUTH["clinepass"] };
 
+// Cline Free OAuth Configuration (shares Cline's OAuth endpoints)
+export const CLINE_FREE_CONFIG = { ...PROVIDER_OAUTH["cline-free"] };
+
 // GitLab Duo OAuth Configuration (Authorization Code Flow with PKCE)
 export const GITLAB_CONFIG = { ...PROVIDER_OAUTH["gitlab"] };
 
@@ -215,6 +218,7 @@ export const PROVIDERS = {
   KILOCODE: "kilocode",
   CLINE: "cline",
   CLINEPASS: "clinepass",
+  CLINE_FREE: "cline-free",
   GITLAB: "gitlab",
   CODEBUDDY: "codebuddy-cn",
   CODEBUDDY_INTL: "codebuddy-intl",
