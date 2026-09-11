@@ -91,3 +91,16 @@ graphify-out/*
 .kiro/
 # Header captures from scripts/capture-claude-headers.mjs (contains live prompt previews)
 capture/
+
+9router-*
+
+# Local sensitive / temp files
+.engine-token.txt
+.tmp-prov.json
+.tmp-providers.json
+.oauth-session.json
+.dev-server.log
+.dev-server-err.log
+.start-dev.ps1
+start-dev-silent.cjs
+debug.log
