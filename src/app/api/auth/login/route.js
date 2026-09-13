@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
 import { isOidcConfigured } from "@/lib/auth/oidc";
 import { isSamlConfigured } from "@/lib/auth/saml.js";
-import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
+import { checkLock, recordFail, recordSuccess, getClientIp, formatLockWait } from "@/lib/auth/loginLimiter";
 import { isLocalRequest } from "@/dashboardGuard";
 
 const RESET_HINT = "Forgot password? Reset to default via 9Router CLI → Settings → Reset Password to Default.";
@@ -24,7 +24,7 @@ export async function POST(request) {
     const lock = checkLock(ip);
     if (lock.locked) {
       return NextResponse.json(
-        { error: `Too many failed attempts. Try again in ${lock.retryAfter}s. ${RESET_HINT}`, retryAfter: lock.retryAfter, resetHint: RESET_HINT },
+        { error: `Too many failed attempts from your IP. Try again in ${formatLockWait(lock.retryAfter)}. ${RESET_HINT}`, retryAfter: lock.retryAfter, resetHint: RESET_HINT },
         { status: 429, headers: { "Retry-After": String(lock.retryAfter) } }
       );
     }
@@ -97,7 +97,7 @@ export async function POST(request) {
     const postLock = checkLock(ip);
     if (postLock.locked) {
       return NextResponse.json(
-        { error: `Too many failed attempts. Try again in ${postLock.retryAfter}s. ${RESET_HINT}`, retryAfter: postLock.retryAfter, resetHint: RESET_HINT },
+        { error: `Too many failed attempts from your IP. Try again in ${formatLockWait(postLock.retryAfter)}. ${RESET_HINT}`, retryAfter: postLock.retryAfter, resetHint: RESET_HINT },
         { status: 429, headers: { "Retry-After": String(postLock.retryAfter) } }
       );
     }

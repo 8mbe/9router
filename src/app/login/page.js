@@ -19,6 +19,14 @@ export default function LoginPage() {
   const [mustChange, setMustChange] = useState(false);
   const [newPassword, setNewPassword] = useState("");
 
+  // "9m 30s" / "45s" — a bare "600s" reads badly for a 10-minute lock.
+  const waitLabel = (() => {
+    const mins = Math.floor(retryAfter / 60);
+    const secs = retryAfter % 60;
+    if (!mins) return `${secs}s`;
+    return secs ? `${mins}m ${secs}s` : `${mins}m`;
+  })();
+
   // Countdown for rate-limit
   useEffect(() => {
     if (retryAfter <= 0) return;
@@ -230,7 +238,7 @@ export default function LoginPage() {
                   {error && <p className="text-xs text-red-500">{error}</p>}
                   {retryAfter > 0 && (
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                      Locked. Retry in <span className="font-mono">{retryAfter}s</span>.
+                      Your IP is locked. Retry in <span className="font-mono">{waitLabel}</span>.
                     </p>
                   )}
                   {resetHint && (
@@ -247,7 +255,7 @@ export default function LoginPage() {
                   loading={loading}
                   disabled={retryAfter > 0}
                 >
-                  {retryAfter > 0 ? `Wait ${retryAfter}s` : "Login"}
+                  {retryAfter > 0 ? `Wait ${waitLabel}` : "Login"}
                 </Button>
 
                 <p className="text-xs text-center text-text-muted mt-2">

@@ -184,12 +184,30 @@ describe("login limiter client IP", () => {
     delete process.env.TRUST_PROXY;
   });
 
-  it("buckets spoofed peer IPs together so lockout cannot be rotated away", () => {
+  // Bucketing every unproven peer together let one attacker lock the whole
+  // instance out. Untrusted claims now get their own bucket (rotation is
+  // covered by the shared UNTRUSTED_GLOBAL_MAX_FAILS backstop instead).
+  it("keeps spoofed peer IPs in separate untrusted buckets", () => {
     const first = getClientIp(request("/api/auth/login", { "x-9r-real-ip": "1.1.1.1" }));
     const second = getClientIp(request("/api/auth/login", { "x-9r-real-ip": "2.2.2.2" }));
 
-    expect(first).toBe("unknown");
-    expect(second).toBe("unknown");
+    expect(first).toBe("untrusted:1.1.1.1");
+    expect(second).toBe("untrusted:2.2.2.2");
+    expect(first).not.toBe(second);
+  });
+
+  it("marks an untrusted claim so it can never collide with a proven peer IP", () => {
+    const untrusted = getClientIp(request("/api/auth/login", { "x-9r-real-ip": "203.0.113.9" }));
+    const trusted = getClientIp(request("/api/auth/login", {
+      "x-9r-real-ip": "203.0.113.9",
+      "x-9r-peer-token": PEER_TOKEN,
+    }));
+
+    expect(untrusted).not.toBe(trusted);
+  });
+
+  it("falls back to a single bucket when the client claims no address at all", () => {
+    expect(getClientIp(request("/api/auth/login", {}))).toBe("untrusted:unknown");
   });
 
   it("keys on the stamped peer IP when the wrapper proved it", () => {

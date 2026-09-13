@@ -9,7 +9,7 @@ import {
   validateSamlResponse,
 } from "@/lib/auth/saml.js";
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
-import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
+import { checkLock, recordFail, recordSuccess, getClientIp, formatLockWait } from "@/lib/auth/loginLimiter";
 
 export async function POST(request) {
   const settings = await getSettings();
@@ -20,7 +20,7 @@ export async function POST(request) {
   if (lock.locked) {
     return NextResponse.redirect(
       new URL(
-        `/login?error=${encodeURIComponent(`Too many failed attempts. Try again in ${lock.retryAfter}s.`)}`,
+        `/login?error=${encodeURIComponent(`Too many failed attempts from your IP. Try again in ${formatLockWait(lock.retryAfter)}.`)}`,
         origin
       )
     );
