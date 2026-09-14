@@ -1168,10 +1168,13 @@ export default function ProviderDetailPage() {
         body: JSON.stringify({ model: `${providerStorageAlias}/${modelId}` }),
       });
       const data = await res.json();
-      setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
+      setModelTestResults((prev) => ({
+        ...prev,
+        [modelId]: { status: data.ok ? "ok" : "error", latencyMs: data.latencyMs },
+      }));
       setModelsTestError(data.ok ? "" : (data.error || "Model not reachable"));
     } catch {
-      setModelTestResults((prev) => ({ ...prev, [modelId]: "error" }));
+      setModelTestResults((prev) => ({ ...prev, [modelId]: { status: "error" } }));
       setModelsTestError("Network error");
     } finally {
       setTestingModelIds((prev) => { const n = new Set(prev); n.delete(modelId); return n; });
@@ -1254,7 +1257,8 @@ export default function ProviderDetailPage() {
                 handleDeleteAlias(model.alias);
               }
             }}
-            testStatus={modelTestResults[model.id]}
+            testStatus={modelTestResults[model.id]?.status}
+            latencyMs={modelTestResults[model.id]?.latencyMs}
             onTest={connections.length > 0 || isFreeNoAuth ? () => handleTestModel(model.id) : undefined}
             isTesting={testingModelIds.has(model.id)}
             isCustom
@@ -1280,7 +1284,8 @@ export default function ProviderDetailPage() {
               onCopy={copy}
               onSetAlias={(alias) => handleSetAlias(model.id, alias, providerStorageAlias)}
               onDeleteAlias={() => handleDeleteAlias(existingAlias)}
-              testStatus={modelTestResults[model.id]}
+              testStatus={modelTestResults[model.id]?.status}
+              latencyMs={modelTestResults[model.id]?.latencyMs}
               onTest={connections.length > 0 || isFreeNoAuth ? () => handleTestModel(model.id) : undefined}
               isTesting={testingModelIds.has(model.id)}
               isFree={model.isFree}

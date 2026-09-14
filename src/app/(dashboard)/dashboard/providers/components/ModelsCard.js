@@ -6,11 +6,13 @@ import { Card, Button, Modal } from "@/shared/components";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { formatLatency } from "@/shared/utils/latency";
 
 // ── ModelRow ───────────────────────────────────────────────────
-export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
+export function ModelRow({ model, fullModel, copied, onCopy, testStatus, latencyMs, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
   const borderColor = testStatus === "ok" ? "border-green-500/40" : testStatus === "error" ? "border-red-500/40" : "border-border";
   const iconColor = testStatus === "ok" ? "#22c55e" : testStatus === "error" ? "#ef4444" : undefined;
+  const latencyLabel = formatLatency(latencyMs);
 
   return (
     <div className={`group px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
@@ -20,7 +22,17 @@ export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCusto
         </span>
         <div className="flex flex-col gap-1">
           <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
-          {model.name && <span className="text-[9px] text-text-muted/70 italic pl-1">{model.name}</span>}
+          <span className="flex items-center gap-1 pl-1">
+            {model.name && <span className="text-[9px] text-text-muted/70 italic">{model.name}</span>}
+            {latencyLabel && (
+              <span
+                title={testStatus === "error" ? "Time until the test failed" : "Round-trip time of the last test"}
+                className={`font-mono text-[9px] ${testStatus === "error" ? "text-red-500/80" : "text-green-600/90 dark:text-green-400/90"}`}
+              >
+                {latencyLabel}
+              </span>
+            )}
+          </span>
         </div>
         {onTest && (
           <div className="relative group/btn">
@@ -59,6 +71,7 @@ ModelRow.propTypes = {
   copied: PropTypes.string,
   onCopy: PropTypes.func.isRequired,
   testStatus: PropTypes.oneOf(["ok", "error"]),
+  latencyMs: PropTypes.number,
   isCustom: PropTypes.bool,
   isFree: PropTypes.bool,
   onDeleteAlias: PropTypes.func,
@@ -193,10 +206,13 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
         body: JSON.stringify({ model: `${providerAlias}/${modelId}`, kind: kindFilter }),
       });
       const data = await res.json();
-      setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
+      setModelTestResults((prev) => ({
+        ...prev,
+        [modelId]: { status: data.ok ? "ok" : "error", latencyMs: data.latencyMs },
+      }));
       setTestError(data.ok ? "" : (data.error || "Model not reachable"));
     } catch {
-      setModelTestResults((prev) => ({ ...prev, [modelId]: "error" }));
+      setModelTestResults((prev) => ({ ...prev, [modelId]: { status: "error" } }));
       setTestError("Network error");
     } finally { setTestingModelId(null); }
   };
@@ -241,7 +257,8 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
                 onCopy={copy}
                 onSetAlias={(alias) => handleSetAlias(model.id, alias)}
                 onDeleteAlias={() => handleDeleteAlias(existingAlias)}
-                testStatus={modelTestResults[model.id]}
+                testStatus={modelTestResults[model.id]?.status}
+              latencyMs={modelTestResults[model.id]?.latencyMs}
                 onTest={() => handleTestModel(model.id)}
                 isTesting={testingModelId === model.id}
                 isFree={model.isFree}
@@ -258,7 +275,8 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
               onCopy={copy}
               onSetAlias={() => {}}
               onDeleteAlias={() => handleDeleteCustomModel(model.id)}
-              testStatus={modelTestResults[model.id]}
+              testStatus={modelTestResults[model.id]?.status}
+              latencyMs={modelTestResults[model.id]?.latencyMs}
               onTest={() => handleTestModel(model.id)}
               isTesting={testingModelId === model.id}
               isCustom

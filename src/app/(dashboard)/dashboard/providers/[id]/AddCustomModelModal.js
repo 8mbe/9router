@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Button, Modal, Toggle } from "@/shared/components";
 import { CAPACITY_META } from "@/shared/constants/models";
+import { formatLatency } from "@/shared/utils/latency";
 
 const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key) => [key, false]));
 
@@ -12,11 +13,12 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
   const [caps, setCaps] = useState(defaultCaps);
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | "ok" | "error"
   const [testError, setTestError] = useState("");
+  const [testLatencyMs, setTestLatencyMs] = useState(null);
   const [saving, setSaving] = useState(false);
 
   // Reset state when modal opens
   useEffect(() => {
-    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTestStatus(null); setTestError(""); }
+    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTestStatus(null); setTestError(""); setTestLatencyMs(null); }
   }, [isOpen]);
 
   // Strip provider's own alias prefix (e.g. "cc/model" -> "model" for cc provider)
@@ -30,6 +32,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     if (!cleanId) return;
     setTestStatus("testing");
     setTestError("");
+    setTestLatencyMs(null);
     try {
       const res = await fetch("/api/models/test", {
         method: "POST",
@@ -39,6 +42,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
       const data = await res.json();
       setTestStatus(data.ok ? "ok" : "error");
       setTestError(data.error || "");
+      setTestLatencyMs(typeof data.latencyMs === "number" ? data.latencyMs : null);
     } catch (err) {
       setTestStatus("error");
       setTestError(err.message);
@@ -60,6 +64,8 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     if (e.key === "Enter") handleTest();
   };
 
+  const latencyLabel = formatLatency(testLatencyMs);
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Add Custom Model">
       <div className="flex flex-col gap-4">
@@ -69,7 +75,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
             <input
               type="text"
               value={modelId}
-              onChange={(e) => { setModelId(e.target.value); setTestStatus(null); setTestError(""); }}
+              onChange={(e) => { setModelId(e.target.value); setTestStatus(null); setTestError(""); setTestLatencyMs(null); }}
               onKeyDown={handleKeyDown}
               placeholder="e.g. claude-opus-4-5"
               className="flex-1 px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
@@ -110,13 +116,19 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
         {testStatus === "ok" && (
           <div className="flex items-center gap-2 text-sm text-green-600">
             <span className="material-symbols-outlined text-base">check_circle</span>
-            Model is reachable
+            <span>
+              Model is reachable
+              {latencyLabel && <span className="font-mono text-xs text-text-muted"> — responded in {latencyLabel}</span>}
+            </span>
           </div>
         )}
         {testStatus === "error" && (
           <div className="flex items-start gap-2 text-sm text-red-500">
             <span className="material-symbols-outlined text-base shrink-0">cancel</span>
-            <span>{testError || "Model not reachable"}</span>
+            <span>
+              {testError || "Model not reachable"}
+              {latencyLabel && <span className="font-mono text-xs text-text-muted"> (after {latencyLabel})</span>}
+            </span>
           </div>
         )}
 

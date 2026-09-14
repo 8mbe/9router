@@ -5,6 +5,7 @@ import PropTypes from "prop-types";
 import { Button } from "@/shared/components";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import { extractContextLength, formatContextLength } from "@/lib/modelProbe/contextLength";
+import { formatLatency } from "@/shared/utils/latency";
 
 const CONCURRENCY_KEY = "9router.modelProbe.concurrency";
 const MIN_CONCURRENCY = 1;
@@ -98,6 +99,10 @@ function KeyChip({ label, state, error, latencyMs, testedAt }) {
   else tooltipParts.push("not tested yet");
   if (testedAt) tooltipParts.push(new Date(testedAt).toLocaleString());
 
+  // Only a finished probe has a meaningful round-trip time; a queued chip's
+  // latency is stale from a previous run.
+  const latencyLabel = (state === "ok" || state === "failed") ? formatLatency(latencyMs) : "";
+
   return (
     <span
       title={tooltipParts.join(" — ")}
@@ -110,6 +115,7 @@ function KeyChip({ label, state, error, latencyMs, testedAt }) {
         {icon}
       </span>
       <span className="truncate">{label}</span>
+      {latencyLabel && <span className="shrink-0 font-mono opacity-70">{latencyLabel}</span>}
     </span>
   );
 }

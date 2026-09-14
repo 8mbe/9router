@@ -1,8 +1,10 @@
 import PropTypes from "prop-types";
 import { CapacityBadges } from "@/shared/components";
+import { formatLatency } from "@/shared/utils/latency";
 
-export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
+export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, latencyMs, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
+  const latencyLabel = formatLatency(latencyMs);
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
     : testStatus === "error"
@@ -29,6 +31,14 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
           <span className="flex min-w-0 items-center text-[9px] gap-1 pl-1">
             {model.name && <span className="truncate text-[9px] italic text-text-muted/70">{model.name}</span>}
             <CapacityBadges caps={caps} colorOverride="text-text-muted/70" size={12} />
+            {latencyLabel && (
+              <span
+                title={testStatus === "error" ? "Time until the test failed" : "Round-trip time of the last test"}
+                className={`shrink-0 font-mono text-[9px] ${testStatus === "error" ? "text-red-500/80" : "text-green-600/90 dark:text-green-400/90"}`}
+              >
+                {latencyLabel}
+              </span>
+            )}
           </span>
         </div>
         {onTest && (
@@ -91,6 +101,7 @@ ModelRow.propTypes = {
   copied: PropTypes.string,
   onCopy: PropTypes.func.isRequired,
   testStatus: PropTypes.oneOf(["ok", "error"]),
+  latencyMs: PropTypes.number,
   isCustom: PropTypes.bool,
   isFree: PropTypes.bool,
   onDeleteAlias: PropTypes.func,
