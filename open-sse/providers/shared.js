@@ -68,10 +68,19 @@ const ANTHROPIC_BETA_HEAVY_AGENT = ["advanced-tool-use-2025-11-20", "effort-2025
 export const ANTHROPIC_BETA_CONTEXT_1M = "context-1m-2025-08-07";
 
 // Heavy-agent beta flags are gated to opus/sonnet — cheaper models don't need them.
+// `redact-thinking` asks Anthropic to return signature-only thinking blocks, which
+// is right for clients that never render thinking but blanks the summaries a
+// client explicitly requested with `thinking.display: "summarized"`.
+const ANTHROPIC_BETA_REDACT_THINKING = "redact-thinking-2026-02-12";
+
+export function wantsThinkingSummaries(body) {
+  return body?.thinking?.display === "summarized";
+}
+
 // `contextMarker` is the marker stripped off the model id (see utils/modelMarkers.js);
 // pass "1m" through to re-attach the 1M-context flag the client asked for.
-export function selectAnthropicBeta(model = "", contextMarker = null) {
-  const flags = [...ANTHROPIC_BETA_BASE];
+export function selectAnthropicBeta(model = "", body = null, contextMarker = null) {
+  const flags = ANTHROPIC_BETA_BASE.filter((flag) => flag !== ANTHROPIC_BETA_REDACT_THINKING || !wantsThinkingSummaries(body));
   if (/^claude-(opus|sonnet)/.test(model)) flags.push(...ANTHROPIC_BETA_HEAVY_AGENT);
   if (contextMarker === "1m") flags.push(ANTHROPIC_BETA_CONTEXT_1M);
   return flags.join(",");
