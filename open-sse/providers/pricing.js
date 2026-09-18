@@ -355,8 +355,19 @@ export const PATTERN_PRICING = [
  * Match a model ID against a glob pattern (* = wildcard). Case-insensitive:
  * registry ids mix casing (e.g. "MiniMax-M2.5" vs "minimax-m2.5").
  */
+// Compiled glob -> RegExp, memoised. Every caller passes a pattern from a
+// static table (PATTERN_PRICING, PATTERN_CAPABILITIES, thinkingLevels), so this
+// map is bounded by those tables and never grows with traffic. Recompiling
+// instead cost ~1us per call, and the capability lookup runs it ~200x per
+// model: on a 3600-model /v1/models that alone was most of a second.
+const patternRegexCache = new Map();
+
 export function matchPattern(pattern, model) {
-  const regex = new RegExp("^" + pattern.split("*").map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
+  let regex = patternRegexCache.get(pattern);
+  if (regex === undefined) {
+    regex = new RegExp("^" + pattern.split("*").map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", "i");
+    patternRegexCache.set(pattern, regex);
+  }
   return regex.test(model);
 }
 

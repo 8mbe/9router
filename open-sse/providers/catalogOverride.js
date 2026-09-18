@@ -29,7 +29,18 @@ function baseId(model) {
   return withoutVendor.toLowerCase().split(":")[0];
 }
 
+// The stat is cheap but not free, and capability lookups run it once per model
+// per field — a 3600-model /v1/models was doing ~14k of them. Checking at most
+// once every STAT_INTERVAL_MS keeps a sync visible within a fraction of a
+// second while making the per-model cost nothing.
+const STAT_INTERVAL_MS = 250;
+let lastStatAt = 0;
+
 function load() {
+  const now = Date.now();
+  if (now - lastStatAt < STAT_INTERVAL_MS && cachedMtime !== -1) return cache;
+  lastStatAt = now;
+
   let mtime;
   try {
     mtime = fs.statSync(CATALOG_FILE).mtimeMs;
@@ -72,6 +83,7 @@ export function getCatalogLimits(provider, model) {
 // Force a re-read on the next lookup (called right after a sync writes the file).
 export function invalidateCatalog() {
   cachedMtime = -1;
+  lastStatAt = 0;
 }
 
 // Hand the reader to capabilities.js. That module is bundled into the browser

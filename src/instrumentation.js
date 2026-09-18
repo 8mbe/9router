@@ -10,5 +10,11 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    // Build the models list once in the background so the first /v1/models
+    // request is served from a warm cache instead of paying for every
+    // provider's catalog fetch itself.
+    const { prewarmModelsCache } = await import("@/lib/modelCatalog/prewarm.js");
+    prewarmModelsCache();
   }
 }

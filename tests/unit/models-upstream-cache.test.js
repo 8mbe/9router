@@ -8,6 +8,8 @@ import {
 beforeEach(() => {
   invalidateUpstreamModels();
   delete process.env.MODELS_CACHE_TTL_MS;
+  delete process.env.MODELS_CACHE_FAILURE_TTL_MS;
+  delete process.env.MODELS_CACHE_COLD_WAIT_MS;
 });
 
 describe("upstream models cache", () => {
@@ -29,17 +31,56 @@ describe("upstream models cache", () => {
     expect(loader).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null and caches nothing when a cold load fails", async () => {
+  it("returns null when a cold load fails, and retries once the window lapses", async () => {
+    process.env.MODELS_CACHE_FAILURE_TTL_MS = "0";
     const loader = vi.fn(async () => { throw new Error("upstream down"); });
     expect(await getCachedUpstream("k", loader)).toBeNull();
     expect(upstreamCacheSize()).toBe(0);
-    // The next request retries rather than serving an empty catalog forever.
+    // With no failure window the next request retries immediately rather than
+    // serving an empty catalog forever.
     expect(await getCachedUpstream("k", async () => ["late"])).toEqual(["late"]);
   });
 
-  it("returns null and caches nothing when a cold load resolves empty", async () => {
+  it("returns null when a cold load resolves empty", async () => {
+    process.env.MODELS_CACHE_FAILURE_TTL_MS = "0";
     expect(await getCachedUpstream("k", async () => null)).toBeNull();
     expect(upstreamCacheSize()).toBe(0);
+  });
+
+  it("does not re-hit an upstream that just came back empty", async () => {
+    const loader = vi.fn(async () => null);
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    // A dead endpoint must not cost a full timeout on every /v1/models call.
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-hit an upstream that just threw", async () => {
+    const loader = vi.fn(async () => { throw new Error("down"); });
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an empty upstream after the failure window lapses", async () => {
+    process.env.MODELS_CACHE_FAILURE_TTL_MS = "5";
+    expect(await getCachedUpstream("k", async () => null)).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await getCachedUpstream("k", async () => ["back"])).toEqual(["back"]);
+  });
+
+  it("gives up on a slow cold load at the budget and fills the cache behind it", async () => {
+    process.env.MODELS_CACHE_COLD_WAIT_MS = "20";
+    const loader = vi.fn(
+      () => new Promise((r) => { setTimeout(() => r(["slow"]), 80); }),
+    );
+    // The request falls back instead of blocking for the full upstream timeout.
+    expect(await getCachedUpstream("k", loader)).toBeNull();
+    await new Promise((r) => setTimeout(r, 120));
+    // ...but the load it started is what serves the next request, for free.
+    expect(await getCachedUpstream("k", loader)).toEqual(["slow"]);
+    expect(loader).toHaveBeenCalledTimes(1);
   });
 
   it("keeps serving the previous catalog when a refresh fails", async () => {
