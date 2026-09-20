@@ -12,6 +12,7 @@ import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveCopilotModels } from "open-sse/services/copilotModels.js";
 import { resolveClinepassModels, resolveClineModels } from "open-sse/services/clinepassModels.js";
+import { resolveClineFreeModels } from "open-sse/services/clineFreeModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
@@ -85,6 +86,12 @@ const LIVE_MODEL_RESOLVERS = {
       accessToken: conn.accessToken,
       apiKey: conn.apiKey,
     });
+    return result?.models?.length ? { models: result.models } : null;
+  },
+  // cline-free has no credential of its own — the service reads the local
+  // `cline auth` session, so the connection record carries nothing to pass in.
+  "cline-free": async () => {
+    const result = await resolveClineFreeModels();
     return result?.models?.length ? { models: result.models } : null;
   },
   "grok-cli": async (conn) => {

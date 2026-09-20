@@ -13,6 +13,7 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
+import { resolveClineFreeModels } from "open-sse/services/clineFreeModels.js";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 
@@ -341,6 +342,18 @@ const PROVIDER_MODELS_CONFIG = {
       return {
         models: getStaticProviderModels("cline"),
         warning: "Cline returned no live models; falling back to static catalog.",
+      };
+    },
+  },
+  // cline-free is a no-auth provider: its catalog comes from the local
+  // `cline auth` session, not from anything stored on the connection.
+  "cline-free": {
+    customResolver: async () => {
+      const result = await resolveClineFreeModels({ forceRefresh: true });
+      if (result?.models?.length) return { models: result.models };
+      return {
+        models: getStaticProviderModels("cline-free"),
+        warning: "Cline returned no live free models; falling back to the bundled catalog. Run `cline auth` if you are not logged in.",
       };
     },
   },

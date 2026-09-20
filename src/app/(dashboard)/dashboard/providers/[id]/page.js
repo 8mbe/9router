@@ -24,6 +24,11 @@ import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 
+// Providers whose model list is resolved from the active connection rather than
+// the static registry: cursor/zed have no static list at all, cline-free has only
+// an offline snapshot of Cline's free tier.
+const LIVE_CATALOG_PROVIDERS = new Set(["cursor", "zed", "cline-free"]);
+
 const ONE_BY_ONE_DELAY_MS = 1000;
 
 const AUTO_PING_SETTINGS_KEYS = {
@@ -156,7 +161,7 @@ export default function ProviderDetailPage() {
   const supportsApiKeyAuth = !!APIKEY_PROVIDERS[providerId] || authModes.includes("apikey");
   const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth;
   const staticModels = getModelsByProviderId(providerId);
-  const models = (providerId === "cursor" || providerId === "zed") && liveModels.length > 0
+  const models = LIVE_CATALOG_PROVIDERS.has(providerId) && liveModels.length > 0
     ? liveModels
     : staticModels;
   const providerAlias = getProviderAlias(providerId);
@@ -470,12 +475,13 @@ export default function ProviderDetailPage() {
     fetchDisabledModels();
   }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
 
-  // Live per-connection catalogs (cursor, zed): the static registry carries
-  // no usable list, so resolve from the active connection. Fires only when
-  // the provider id or connection list changes — no polling, no loop.
+  // Live per-connection catalogs (cursor, zed, cline-free): the static registry
+  // carries no usable list — or, for cline-free, only a snapshot of Cline's free
+  // tier — so resolve from the active connection. Fires only when the provider id
+  // or connection list changes — no polling, no loop.
   // Cursor path is statement-identical to before; zed adds error surfacing.
   useEffect(() => {
-    const isLiveCatalog = providerId === "cursor" || providerId === "zed";
+    const isLiveCatalog = LIVE_CATALOG_PROVIDERS.has(providerId);
     if (!isLiveCatalog) {
       setLiveModels([]);
       return;
