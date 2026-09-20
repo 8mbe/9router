@@ -17,6 +17,17 @@ const DEFAULT_SETTINGS = {
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},
+  // Auto-combo: a bare model name (no provider prefix) is routed across every
+  // connected provider carrying that model, falling back provider by provider.
+  // See src/sse/services/autoCombo.js.
+  autoComboEnabled: true,
+  // Match provider spellings loosely (gpt-5.6-sol ~ gpt-5-6-sol ~ …-latest).
+  // false restricts membership to exact/canonical matches only.
+  autoComboFuzzy: true,
+  autoComboStrategy: "fallback",
+  autoComboMaxMembers: 8,
+  // Provider ids to try first within an auto-combo, best first.
+  autoComboPriority: [],
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },

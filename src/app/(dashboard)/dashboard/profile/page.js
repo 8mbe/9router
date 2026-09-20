@@ -292,6 +292,22 @@ export default function ProfilePage() {
     }
   };
 
+  // Auto-combo settings share one updater: they are all simple scalar flags.
+  const updateAutoCombo = async (patch) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, ...patch }));
+      }
+    } catch (err) {
+      console.error("Failed to update auto combo settings:", err);
+    }
+  };
+
   const updateStickyLimit = async (limit) => {
     const numLimit = parseInt(limit);
     if (isNaN(numLimit) || numLimit < 1) return;
@@ -1511,6 +1527,38 @@ export default function ProfilePage() {
                   onChange={(e) => updateComboStickyLimit(e.target.value)}
                   disabled={loading}
                   className="w-20 text-center"
+                />
+              </div>
+            )}
+
+            {/* Auto Combo */}
+            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Auto Combo</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  Send a bare model name (no provider prefix) and it falls back across every provider that has it
+                </p>
+              </div>
+              <Toggle
+                checked={settings.autoComboEnabled !== false}
+                onChange={() => updateAutoCombo({ autoComboEnabled: settings.autoComboEnabled === false })}
+                disabled={loading}
+              />
+            </div>
+
+            {/* Auto Combo fuzzy matching */}
+            {settings.autoComboEnabled !== false && (
+              <div className="flex items-start sm:items-center justify-between gap-4 pt-2 border-t border-border/50">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm sm:text-base">Loose Model Matching</p>
+                  <p className="text-xs sm:text-sm text-text-muted">
+                    Treat provider spellings as the same model (gpt-5.6-sol = gpt-5-6-sol = gpt-5.6-sol-latest)
+                  </p>
+                </div>
+                <Toggle
+                  checked={settings.autoComboFuzzy !== false}
+                  onChange={() => updateAutoCombo({ autoComboFuzzy: settings.autoComboFuzzy === false })}
+                  disabled={loading}
                 />
               </div>
             )}

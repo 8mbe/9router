@@ -239,6 +239,44 @@ flowchart TD
 
 Fallback decisions are driven by `open-sse/services/accountFallback.js` using status codes and error-message heuristics.
 
+### Auto-combos (bare model names)
+
+A model string with no `/` that is neither a user-defined combo nor a model
+alias does not fall back to guessing one provider from the name prefix any
+more. `src/sse/services/autoCombo.js` assembles a combo on the fly out of every
+provider that carries the model, and that combo runs through the same
+`handleComboChat` path as a hand-built one.
+
+Resolution order for a bare name is: **user-defined combo → model alias →
+auto-combo → name-prefix inference**. Explicit configuration always wins; the
+prefix heuristic remains the last resort for a model nothing carries.
+
+Membership comes from `open-sse/services/modelMatch.js`, which compares ids in
+tiers — exact, canonical (case/separator/vendor-prefix insensitive), decorated
+(`-latest`, `-preview`, snapshot dates, `:free`), short variant affix, then a
+small edit distance. Members are ordered by match quality first, so an exact hit
+is always tried before a fuzzy one; ties break on explicit provider priority
+(`settings.autoComboPriority`), credentialed accounts before no-auth public
+providers, then account count.
+
+Per-provider catalogs come from the account's pinned `enabledModels`, else an
+*already warm* upstream catalog (`peekCachedUpstream` — auto-combo never blocks
+a chat request on a catalog fetch), else the static registry, plus any custom
+models registered under that prefix. Dashboard-disabled models are excluded.
+
+`open-sse/services/autoComboHealth.js` benches a `provider/model` pair that
+fails, on an escalating cooldown (2m → 10m → 30m → 2h → 6h, or an upstream
+`resetsAt` when that is later), cleared by a single success. The bench is
+in-memory and **scoped to auto-combo assembly only**: an explicit
+`provider/model` request, an alias, or a user-defined combo still reaches the
+provider. When every member is benched the request still tries them,
+soonest-eligible first, rather than failing outright.
+
+Settings: `autoComboEnabled`, `autoComboFuzzy`, `autoComboStrategy`,
+`autoComboMaxMembers`, `autoComboPriority`. `GET /api/auto-combo` shows benched
+members (and, with `?model=`, what a name resolves to right now);
+`DELETE /api/auto-combo` clears them.
+
 ## OAuth Onboarding and Token Refresh Lifecycle
 
 ```mermaid

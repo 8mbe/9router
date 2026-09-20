@@ -186,3 +186,23 @@ export function invalidateUpstreamModels(prefix) {
 export function upstreamCacheSize() {
   return cache.size;
 }
+
+/**
+ * Read a cached upstream catalog WITHOUT triggering a load.
+ *
+ * `/v1/models` can afford to wait on a cold fetch; a chat request cannot — it
+ * would add seconds of provider-catalog latency to the request it is supposed
+ * to route. Auto-combo resolution therefore only uses catalogs that are already
+ * warm (boot prewarm and any earlier /v1/models call fill them) and falls back
+ * to the static table otherwise.
+ *
+ * Stale entries are still returned: a catalog that changed five minutes ago is
+ * a far better answer than none.
+ *
+ * @param {string} key
+ * @returns {any|null}
+ */
+export function peekCachedUpstream(key) {
+  const entry = cache.get(key);
+  return entry?.value ?? null;
+}

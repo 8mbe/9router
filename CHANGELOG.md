@@ -1,3 +1,8 @@
+# Unreleased
+
+## Features
+- **Auto Combo**: a bare model name (`gpt-5.6-sol`, not `provider/gpt-5.6-sol`) is now routed across **every** connected provider that carries that model, falling back provider by provider until one answers — no combo has to be defined by hand. Provider spellings are matched fuzzily, in tiers, so `gpt-5-6-sol`, `openai/gpt-5.6-sol`, `gpt-5.6-sol-latest` and `gpt-5-6-solm` all join the same combo while an exact match is always tried first. A member that fails is benched from auto-combos on an escalating cooldown (2m → 6h, cleared by one success), so later requests skip a dead provider instead of paying its timeout; benching never affects explicit `provider/model` requests, aliases or user-defined combos. User-defined combos and model aliases with the same name still win outright. Toggles under Profile → Fallback (`Auto Combo`, `Loose Model Matching`); inspect or clear benched members via `GET`/`DELETE /api/auto-combo`.
+
 # v0.5.81 (2026-09-18)
 
 ## Features
