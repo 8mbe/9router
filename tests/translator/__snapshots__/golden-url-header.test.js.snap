@@ -421,25 +421,6 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
 }
 `;
 
-exports[`GOLDEN buildHeaders (default executor providers) > cline-free → headers (apiKey / oauth) 1`] = `
-{
-  "apiKey": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "nonStream": {
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-  "oauth": {
-    "Accept": "text/event-stream",
-    "Authorization": "Bearer <TOK>",
-    "Content-Type": "application/json",
-  },
-}
-`;
-
 exports[`GOLDEN buildHeaders (default executor providers) > clinepass → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -1546,13 +1527,6 @@ exports[`GOLDEN buildUrl (default executor providers) > cline → url (stream + 
 {
   "nonStream": "https://api.cline.bot/api/v1/chat/completions",
   "stream": "https://api.cline.bot/api/v1/chat/completions",
-}
-`;
-
-exports[`GOLDEN buildUrl (default executor providers) > cline-free → url (stream + non-stream) 1`] = `
-{
-  "nonStream": "cline://core/inprocess",
-  "stream": "cline://core/inprocess",
 }
 `;
 
