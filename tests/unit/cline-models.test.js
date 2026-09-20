@@ -1,6 +1,7 @@
 // Cline's free tier was invisible in 9router: /api/v1/models lists the ~450
-// models the gateway routes, but the free plan's own `cline-free/*` ids are not
-// in it — they come from the recommended feed. These pin the merge.
+// models the gateway routes, but it says nothing about who pays, and the free
+// plan's own `cline-free/*` ids are not even in it. The recommended feed is the
+// authority on what is free. These pin the merge.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
@@ -12,6 +13,7 @@ const CATALOG = {
   data: [
     { id: "anthropic/claude-opus-5", name: "Claude Opus 5" },
     { id: "google/gemma-4-31b-it:free", name: "Google: Gemma 4 31B (free)" },
+    { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "NVIDIA: Nemotron 3 Ultra (free)" },
     { id: "cline-pass/glm-5.3", name: "cline-pass/glm-5.3" },
   ],
 };
@@ -20,10 +22,12 @@ const FEED = {
   recommended: [{ id: "openai/gpt-6-astra", name: "gpt-6-astra" }],
   free: [
     { id: "cline-free/deepseek-v4.1-flash", name: "Deepseek-v4.1-Flash" },
+    // Priced in the catalog, free on Cline's plan — the feed is what decides.
+    { id: "z-ai/glm-5.3-flash", name: "glm-5.3-flash" },
     { id: "cline-free/solar-pro4", name: "Solar Pro 4" },
-    // Cline lists this one under `free` as well, but it is an ordinary catalog
-    // id — it must not be duplicated when /models already returned it.
-    { id: "anthropic/claude-opus-5", name: "Claude Opus 5" },
+    // A `:free` id Cline really serves, also returned by /models — it must
+    // survive the `:free` cull and not end up in the list twice.
+    { id: "google/gemma-4-31b-it:free", name: "Google: Gemma 4 31B (free)" },
   ],
 };
 
@@ -50,20 +54,36 @@ describe("cline live model catalog", () => {
     expect(ids).toContain("google/gemma-4-31b-it:free");
   });
 
+  it("keeps a feed model the catalog prices — Cline serves it free anyway", async () => {
+    stubFetch({ [MODELS_URL]: CATALOG, [FEED_URL]: FEED });
+    const { models } = await resolveClineModels({ accessToken: "eyJtoken" });
+    expect(models.map((m) => m.id)).toContain("z-ai/glm-5.3-flash");
+  });
+
   it("puts the free plan first, so it is not buried under 400+ paid ids", async () => {
     stubFetch({ [MODELS_URL]: CATALOG, [FEED_URL]: FEED });
     const { models } = await resolveClineModels({ accessToken: "eyJtoken" });
-    expect(models.slice(0, 2).map((m) => m.id)).toEqual([
+    expect(models.slice(0, 4).map((m) => m.id)).toEqual([
       "cline-free/deepseek-v4.1-flash",
+      "z-ai/glm-5.3-flash",
       "cline-free/solar-pro4",
+      "google/gemma-4-31b-it:free",
     ]);
   });
 
   it("lists a model the feed and the catalog share exactly once", async () => {
     stubFetch({ [MODELS_URL]: CATALOG, [FEED_URL]: FEED });
     const { models } = await resolveClineModels({ accessToken: "eyJtoken" });
-    const opus = models.filter((m) => m.id === "anthropic/claude-opus-5");
-    expect(opus).toHaveLength(1);
+    const shared = models.filter((m) => m.id === "google/gemma-4-31b-it:free");
+    expect(shared).toHaveLength(1);
+  });
+
+  it("drops the vendors' `:free` ids, which mostly just fail on first use", async () => {
+    stubFetch({ [MODELS_URL]: CATALOG, [FEED_URL]: FEED });
+    const ids = (await resolveClineModels({ accessToken: "eyJtoken" })).models.map((m) => m.id);
+    expect(ids).not.toContain("nvidia/nemotron-3-ultra-550b-a55b:free");
+    // …unless Cline's own free feed names it.
+    expect(ids).toContain("google/gemma-4-31b-it:free");
   });
 
   it("still returns the catalog when the feed request fails", async () => {
@@ -71,7 +91,6 @@ describe("cline live model catalog", () => {
     const { models } = await resolveClineModels({ accessToken: "eyJtoken" });
     expect(models.map((m) => m.id)).toEqual([
       "anthropic/claude-opus-5",
-      "google/gemma-4-31b-it:free",
       "cline-pass/glm-5.3",
     ]);
   });
@@ -81,7 +100,9 @@ describe("cline live model catalog", () => {
     const { models } = await resolveClineModels({ accessToken: "eyJtoken" });
     expect(models.map((m) => m.id)).toEqual([
       "cline-free/deepseek-v4.1-flash",
+      "z-ai/glm-5.3-flash",
       "cline-free/solar-pro4",
+      "google/gemma-4-31b-it:free",
     ]);
   });
 

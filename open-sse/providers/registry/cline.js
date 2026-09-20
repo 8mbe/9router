@@ -44,35 +44,17 @@ export default {
     { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
     { id: "google/gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite Preview" },
     { id: "kwaipilot/kat-coder-pro", name: "KAT Coder Pro" },
-    // Cline's free tier. The `:free` ids come back from the live catalog too, but
-    // the `cline-free/*` ones are served only by the account's own free plan and
-    // appear in no /models response — without them the free list is incomplete
-    // whenever the live fetch is unavailable (no connection yet, offline, 401).
-    { id: "cline-free/deepseek-v4.1-flash", name: "Deepseek-v4.1-Flash" },
-    { id: "cline-free/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
-    { id: "cline-free/solar-pro4", name: "Solar Pro 4" },
-    { id: "inclusionai/ling-3.0-flash-vl:free", name: "inclusionAI: Ling 3.0 Flash VL (free)", contextLength: 262144 },
-    { id: "nex-agi/nex-n2.5-mini:free", name: "Nex AGI: Nex-N2.5-Mini (free)", contextLength: 262144 },
-    { id: "nex-agi/nex-n2.5-pro:free", name: "Nex AGI: Nex-N2.5-Pro (free)", contextLength: 262144 },
-    { id: "inclusionai/ling-3.0-flash-sante:free", name: "inclusionAI: Ling 3.0 Flash Sante (free)", contextLength: 262144 },
-    { id: "inclusionai/ling-3.0-flash-fin:free", name: "inclusionAI: Ling 3.0 Flash Fin (free)", contextLength: 262144 },
-    { id: "qwen/qwen3.8-27b:free", name: "Qwen: Qwen3.8 27B (free)", contextLength: 262144 },
-    { id: "dots-studio/dots-3-note-preview:free", name: "Dots Studio: Dots3-Note Preview (free)", contextLength: 512000 },
-    { id: "liquid/lfm-2.5-2.6b:free", name: "LiquidAI: LFM2.5-2.6B (free)", contextLength: 65536 },
-    { id: "nvidia/nemotron-3.5-lightning:free", name: "NVIDIA: Nemotron 3.5 Lightning (free)", contextLength: 1000000 },
-    { id: "thinkingmachines/inkling-small:free", name: "Thinking Machines: Inkling Small (free)", contextLength: 1048576 },
-    { id: "poolside/laguna-s-2.1:free", name: "Poolside: Laguna S 2.1 (free)", contextLength: 262144 },
-    { id: "thinkingmachines/inkling:free", name: "Thinking Machines: Inkling (free)", contextLength: 1048576 },
-    { id: "poolside/laguna-xs-2.1:free", name: "Poolside: Laguna XS 2.1 (free)", contextLength: 262144 },
-    { id: "cohere/north-mini-code:free", name: "Cohere: North Mini Code (free)", contextLength: 256000 },
-    { id: "z-ai/glm-5.2:free", name: "Z.ai: GLM 5.2 (free)", contextLength: 32768 },
-    { id: "nvidia/nemotron-3.5-content-safety:free", name: "NVIDIA: Nemotron 3.5 Content Safety (free)", contextLength: 128000 },
-    { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "NVIDIA: Nemotron 3 Ultra (free)", contextLength: 1000000 },
-    { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", name: "NVIDIA: Nemotron 3 Nano Omni (free)", contextLength: 256000 },
-    { id: "google/gemma-4-26b-a4b-it:free", name: "Google: Gemma 4 26B A4B (free)", contextLength: 262144 },
-    { id: "google/gemma-4-31b-it:free", name: "Google: Gemma 4 31B (free)", contextLength: 262144 },
-    { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "NVIDIA: Nemotron 3 Super (free)", contextLength: 262144 },
-    { id: "openrouter/free", name: "Free Models Router", contextLength: 200000 },
+    // Cline's free plan, in the order Cline's own picker lists it. This is the
+    // `free` feed from /ai/cline/recommended-models, not every zero-priced id in
+    // the catalog: most of the vendors' `:free` models are dead ends that only
+    // fail on the first request. The live catalog is still merged over this list
+    // when a connection can reach Cline.
+    { id: "cline-free/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash (free)", contextLength: 1048576 },
+    { id: "cline-free/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor (free)", contextLength: 1048576 },
+    // Free on Cline's plan although the catalog quotes a price for it.
+    { id: "z-ai/glm-5.3-flash", name: "GLM-5.3-Flash (free)", contextLength: 1310720 },
+    { id: "cline-free/solar-pro4", name: "Solar Pro 4 (free)", contextLength: 524288 },
+    { id: "poolside/laguna-s-2.1:free", name: "Laguna S 2.1 (free)", contextLength: 262144 },
   ],
   oauth: {
     appBaseUrl: "https://app.cline.bot",

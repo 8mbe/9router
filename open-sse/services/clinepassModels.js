@@ -1,10 +1,10 @@
 import { buildClineHeaders } from "../shared/clineAuth.js";
 
 const CLINEPASS_MODELS_ENDPOINT = "https://api.cline.bot/api/v1/models";
-// Cline's curated feed. It is the only place the `cline-free/*` ids appear:
-// /models lists what the gateway can route, and the free plan's own models are
-// not part of that catalog, so without this call the free tier looks emptier
-// than it is.
+// Cline's curated feed, and the authority on what the free plan covers: /models
+// lists what the gateway can route but says nothing about who pays, and the
+// `cline-free/*` ids are not even in it. Without this call the free tier looks
+// emptier than it is.
 const CLINE_RECOMMENDED_ENDPOINT = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
 const FETCH_TIMEOUT_MS = 5000;
 
@@ -95,12 +95,20 @@ export async function resolveClineModels(credentials) {
 
   const models = [];
   const seen = new Set();
-  // Free plan first: /models is the long catalog, and burying the handful of
-  // free ids at the end of 400+ paid ones is how they go unnoticed.
-  const freeFirst = [
-    ...(freeList || []).filter((m) => typeof m?.id === "string" && m.id.startsWith("cline-free/")),
-    ...(rawList || []),
-  ];
+  // The feed's `free` array is Cline's own answer to "what is free on this
+  // account" — it is taken whole, not filtered by id shape or by catalog price.
+  // z-ai/glm-5.3-flash is the case that matters: Cline serves it free, while the
+  // catalog quotes a per-token price for it.
+  // Free first, too: /models is the long list, and burying the handful of free
+  // ids at the end of 400+ paid ones is how they go unnoticed.
+  const free = (freeList || []).filter((m) => typeof m?.id === "string");
+  const freeIds = new Set(free.map((m) => m.id));
+  // Everything else the gateway routes, minus the vendors' own `:free` ids: the
+  // catalog is full of them and most only fail on the first request. The ones
+  // Cline actually serves (poolside/laguna-s-2.1:free today) are in the feed
+  // above, so they survive this.
+  const paid = (rawList || []).filter((m) => !(typeof m?.id === "string" && m.id.endsWith(":free") && !freeIds.has(m.id)));
+  const freeFirst = [...free, ...paid];
   for (const m of freeFirst) {
     if (typeof m?.id !== "string" || m.id.trim() === "" || seen.has(m.id)) continue;
     seen.add(m.id);
