@@ -24,6 +24,9 @@ import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
+import { resolveAutoCombo } from "../services/autoCombo.js";
+import { markAutoComboHealthy, markAutoComboUnavailable } from "open-sse/services/autoComboHealth.js";
+import { checkFallbackError } from "open-sse/services/accountFallback.js";
 
 /**
  * Handle chat completion request
@@ -135,6 +138,43 @@ export async function handleChat(request, clientRawRequest = null) {
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit
+    });
+  }
+
+  // Bare model name with no provider prefix and no explicit combo/alias: route
+  // it across every connected provider that carries the model (auto-combo).
+  // Members that fail get benched for later requests — see services/autoCombo.js.
+  const autoCombo = await resolveAutoCombo(modelStr, settings);
+  if (autoCombo && autoCombo.models.length > 0) {
+    const trackedSingleModel = withAutoComboHealth(
+      (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, contextMarker)
+    );
+    // Capacity adapters apply here exactly as they do to a hand-built combo: a
+    // single-provider auto-combo must still be able to borrow a vision model.
+    const autoAugmented = augmentModelsWithCapacityAdapter(autoCombo.models, requiredCapabilities, settings);
+    const autoAdapterAdded = autoAugmented.filter((m) => !autoCombo.models.includes(m));
+
+    if (autoAugmented.length === 1) {
+      log.info("AUTOCOMBO", `"${modelStr}" → ${autoAugmented[0]} (only provider carrying it)`);
+      return trackedSingleModel(body, autoAugmented[0]);
+    }
+
+    // An adapter-only expansion of a single provider follows the adapter's own
+    // strategy, the same as the solo path below.
+    const autoStrategy = autoCombo.models.length === 1
+      ? getActiveAdapterStrategy(requiredCapabilities, settings)
+      : (settings.autoComboStrategy || "fallback");
+    const benchedNote = autoCombo.benched.length ? `, benched: ${autoCombo.benched.join(", ")}` : "";
+    log.info("AUTOCOMBO", `"${modelStr}" → ${autoAugmented.length} providers: ${autoAugmented.join(", ")}${benchedNote}`);
+
+    return handleComboChat({
+      body,
+      models: autoAugmented,
+      handleSingleModel: withCapacityAdapterStripping(trackedSingleModel, autoAdapterAdded),
+      log,
+      comboName: `auto:${modelStr}`,
+      comboStrategy: autoStrategy,
+      comboStickyLimit: settings.comboStickyRoundRobinLimit,
     });
   }
 
@@ -338,4 +378,33 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     return result.response;
   }
+}
+
+/**
+ * Wrap a single-model handler so auto-combo learns which members work.
+ *
+ * Only failures worth falling back from bench a member: a 400 from a malformed
+ * request says nothing about the provider, and benching it would take a healthy
+ * provider out of rotation over the client's own mistake. Status alone is
+ * enough to decide — the body is left untouched so the caller still owns the
+ * (possibly streaming) response.
+ */
+function withAutoComboHealth(handleSingleModel) {
+  return async (body, modelStr) => {
+    const response = await handleSingleModel(body, modelStr);
+    try {
+      if (response?.ok) {
+        markAutoComboHealthy(modelStr);
+      } else if (response?.status) {
+        const { shouldFallback } = checkFallbackError(response.status, "");
+        if (shouldFallback) {
+          const until = markAutoComboUnavailable(modelStr, response.status, response.statusText || null);
+          log.warn("AUTOCOMBO", `${modelStr} benched until ${new Date(until).toISOString()} (${response.status})`);
+        }
+      }
+    } catch {
+      // Health bookkeeping must never break the response path.
+    }
+    return response;
+  };
 }
