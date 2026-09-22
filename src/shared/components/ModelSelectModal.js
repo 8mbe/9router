@@ -450,13 +450,23 @@ export default function ModelSelectModal({
         if (models.length === 0) return;
       }
       if (query) {
-        const providerNameMatches = group.name.toLowerCase().includes(query);
-        models = models.filter(
+        // Match the routed value too, so pasting a full "prefix/model-id"
+        // (e.g. "shrllm/deepseek-v4-flash") finds the model — the id alone
+        // never contains the provider prefix.
+        const providerMatches =
+          group.name.toLowerCase().includes(query) ||
+          String(group.alias || "").toLowerCase().includes(query) ||
+          providerId.toLowerCase().includes(query);
+        const matched = models.filter(
           (m) =>
             m.name.toLowerCase().includes(query) ||
-            m.id.toLowerCase().includes(query)
+            m.id.toLowerCase().includes(query) ||
+            String(m.value || "").toLowerCase().includes(query)
         );
-        if (models.length === 0 && !providerNameMatches) return;
+        // A query that only matches the provider keeps the whole group: an empty
+        // group used to render a header with no clickable models at all.
+        models = matched.length > 0 ? matched : providerMatches ? models : [];
+        if (models.length === 0) return;
       }
       filtered[providerId] = {
         ...group,
