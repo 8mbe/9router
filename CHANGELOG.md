@@ -3,6 +3,26 @@
 ## Features
 - **Auto Combo**: a bare model name (`gpt-5.6-sol`, not `provider/gpt-5.6-sol`) is now routed across **every** connected provider that carries that model, falling back provider by provider until one answers — no combo has to be defined by hand. Provider spellings are matched fuzzily, in tiers, so `gpt-5-6-sol`, `openai/gpt-5.6-sol`, `gpt-5.6-sol-latest` and `gpt-5-6-solm` all join the same combo while an exact match is always tried first. A member that fails is benched from auto-combos on an escalating cooldown (2m → 6h, cleared by one success), so later requests skip a dead provider instead of paying its timeout; benching never affects explicit `provider/model` requests, aliases or user-defined combos. User-defined combos and model aliases with the same name still win outright. Toggles under Profile → Fallback (`Auto Combo`, `Loose Model Matching`); inspect or clear benched members via `GET`/`DELETE /api/auto-combo`.
 
+# v0.5.85 (2026-09-22)
+
+## Features
+- **System One**: add `/v1/systemone` decision endpoint for Jev models (OpenCode Zen and OpenRouter lanes), wire into sidebar and Media Providers page with interactive probe testing
+- **CLI Tools**: add dynamic configuration, settings APIs, and official logos for Pi, OMP, Crush, ForgeCode, Smelt, and CodeWhale
+- **Analytics & Usage**: add Requests mode, provider/model breakdown charts, All Time period filter, and refined overview cards
+- **Combos**: add Cursor/Claude Default presets; support bulk select/delete and bulk strategy changes (Fallback / Round Robin / Fusion)
+- **Model Capabilities**: expose model capability metadata on `/v1/models` and aggregate capabilities across combo targets
+- **OpenCode Zen & MiMo**: add OpenCode Zen (`opencode-zen`) provider with free-tier fingerprint; switch default vision fallback to MiMo V2.6 Flash Free
+- **Qoder CN**: add `qoder-cn` provider for qoder.com.cn with OAuth flow, COSY protocol, and CN gateway routing
+
+## Fixes
+- **Translator**: map Claude `refusal` stop_reason to `content_filter` and surface explanation; strip replayed reasoning fields for Groq, Mistral, and Cerebras (#4220)
+- **Antigravity**: drop requestType `agent` to avoid false 429 `RESOURCE_EXHAUSTED`; separate weekly and short-window (5-hour) quotas and deduplicate dashboard rows
+- **Responses API**: report usage on `response.completed` so clients can auto-compact (#3432)
+- **Hugging Face**: migrate to Inference Providers router (`router.huggingface.co`), expand image models catalog, and add STT route
+- **Qoder**: prevent signed request replay (`403/103 Duplicate request`), handle code 110 billing blocks, and preserve upstream SSE error status
+- **Performance**: bound usage `lastUsed` scan to a 2-day window; map large budget tokens to `max` reasoning tier
+- **Docker**: publish verified multi-platform images (linux/amd64 and linux/arm64) with configurable apk build mirrors
+
 # v0.5.81 (2026-09-18)
 
 ## Features
@@ -12,6 +32,8 @@
 - **i18n**: integrate Persian (fa) translation
 
 ## Fixes
+- **Cursor**: stop AgentService empty turns (`OUT 0`) and silent hangs — fold system prompts instead of `custom_system_prompt`, send `ModelDetails`, read Composer/Grok `thinking_delta`, ack request-context without echoing MCP tools, and reject IDE execs so the model can continue
+- **RTK**: for Cursor, compress source-format `tool_result` / `role:tool` **before** translation — its translator rewrites those shapes, so post-translate compression missed them. Other providers keep the post-translate pass unchanged
 - **OpenCode / OpenCode Go**: resolve 403 `FreeTierError` and 429 rate limits with canonical session format, valid User-Agent, and stable upstream session reuse; force stream and declare `forceStream` for free-tier SSE aggregation; cloak decoy tools, normalize Muse Free tool choice, and strip prior reasoning items on Responses models; route Union Alpha via Messages API
 - **Kiro**: preserve underscores in tool names (`mcp__server__tool`) and restore client tool names in responses; use neutral placeholder for tool-result-only turns; forward tool-result images
 - **Stream**: report aborts after HTTP 200 in-band (per-format error frames) instead of closing silently
