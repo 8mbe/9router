@@ -18,20 +18,31 @@
   "anthropic": {
     "baseUrl": "https://api.anthropic.com/v1/messages",
     "format": "claude",
+    "urlSuffix": "?beta=true",
     "headers": {
       "Anthropic-Version": "2023-06-01",
       "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28,fallback-credit-2026-06-01",
       "Anthropic-Dangerous-Direct-Browser-Access": "true",
-      "User-Agent": "claude-cli/2.1.263 (external, cli)",
+      "User-Agent": "claude-cli/2.1.280 (external, cli)",
       "X-App": "cli",
       "X-Stainless-Retry-Count": "0",
       "X-Stainless-Runtime-Version": "v26.3.0",
       "X-Stainless-Package-Version": "0.112.1",
       "X-Stainless-Runtime": "node",
       "X-Stainless-Lang": "js",
-      "X-Stainless-Arch": "<host>",
-      "X-Stainless-OS": "<host>",
+      "X-Stainless-Arch": "x64",
+      "X-Stainless-OS": "Linux",
       "X-Stainless-Timeout": "600"
+    },
+    "auth": {
+      "apiKey": {
+        "header": "x-api-key",
+        "scheme": "raw"
+      },
+      "oauth": {
+        "header": "Authorization",
+        "scheme": "bearer"
+      }
     }
   },
   "antigravity": {
@@ -104,15 +115,15 @@
       "Anthropic-Version": "2023-06-01",
       "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28,fallback-credit-2026-06-01",
       "Anthropic-Dangerous-Direct-Browser-Access": "true",
-      "User-Agent": "claude-cli/2.1.263 (external, cli)",
+      "User-Agent": "claude-cli/2.1.280 (external, cli)",
       "X-App": "cli",
       "X-Stainless-Retry-Count": "0",
       "X-Stainless-Runtime-Version": "v26.3.0",
       "X-Stainless-Package-Version": "0.112.1",
       "X-Stainless-Runtime": "node",
       "X-Stainless-Lang": "js",
-      "X-Stainless-Arch": "<host>",
-      "X-Stainless-OS": "<host>",
+      "X-Stainless-Arch": "x64",
+      "X-Stainless-OS": "Linux",
       "X-Stainless-Timeout": "600"
     },
     "quirks": {
@@ -1095,5 +1106,17 @@
       "preserveCacheControl": true
     },
     "format": "openai"
+  },
+  "codebuff": {
+    "baseUrl": "https://www.codebuff.com/api/v1/chat/completions",
+    "format": "openai",
+    "forceStream": true,
+    "retry": {
+      "429": {
+        "attempts": 2,
+        "delayMs": 5000
+      }
+    },
+    "tokenUrl": "https://www.codebuff.com/api/auth/cli/status"
   }
 }
