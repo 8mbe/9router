@@ -1,4 +1,5 @@
 // Auto-generated: static imports for all registry entries
+import p125 from "./codebuff.js";
 import p0 from "./alicode-intl.js";
 import p1 from "./alicode.js";
 import p2 from "./anthropic.js";
@@ -250,4 +251,5 @@ export default [
   p120,
   p121,
   p122,
+  p125,
 ];

@@ -256,6 +256,7 @@ export async function GET(request, { params }) {
       // Providers that don't use PKCE for device code (Grok CLI HAR: plain device_code, no challenge)
       const noPkceDeviceProviders = [
         "github",
+        "codebuff",
         "kiro",
         "kimi",
         "kimi-coding",
@@ -498,7 +499,7 @@ export async function POST(request, { params }) {
       }
 
       // Providers that don't use PKCE for device code
-      const noPkceProviders = ["github", "kimi", "kimi-coding", "kilocode", "codebuddy-cn", "codebuddy-intl"];
+      const noPkceProviders = ["github", "kimi", "kimi-coding", "kilocode", "codebuddy-cn", "codebuddy-intl", "codebuff"];
       let result;
       if (noPkceProviders.includes(provider)) {
         // kimi needs extraData._kimiDeviceId for stable X-Msh-Device-Id (CLIProxyAPI parity)
