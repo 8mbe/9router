@@ -243,7 +243,3 @@ export const PROVIDERS = {
   WINDSURF: "windsurf",
   ZED: "zed",
 };
-
-// Codebuff (Freebuff) — device-code-shaped CLI login: POST /api/auth/cli/code
-// then poll /api/auth/cli/status. No refresh token; 401 means re-login.
-export const CODEBUFF_CONFIG = { ...PROVIDER_OAUTH["codebuff"] };

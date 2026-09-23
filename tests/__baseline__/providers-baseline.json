@@ -1106,17 +1106,5 @@
       "preserveCacheControl": true
     },
     "format": "openai"
-  },
-  "codebuff": {
-    "baseUrl": "https://www.codebuff.com/api/v1/chat/completions",
-    "format": "openai",
-    "forceStream": true,
-    "retry": {
-      "429": {
-        "attempts": 2,
-        "delayMs": 5000
-      }
-    },
-    "tokenUrl": "https://www.codebuff.com/api/auth/cli/status"
   }
 }

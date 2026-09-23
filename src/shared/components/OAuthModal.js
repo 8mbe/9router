@@ -282,7 +282,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       // Device code flow providers (must match oauth providers with flowType: "device_code")
       const deviceCodeProviders = [
         "github",
-        "codebuff",
         "kiro",
         "kimi",
         "kimi-coding",
@@ -334,10 +333,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             }
           : (provider === "kimi" || provider === "kimi-coding")
           ? { _kimiDeviceId: data._kimiDeviceId }
-          : provider === "codebuff"
-          // The status poll re-sends the fingerprint hash and the expiresAt
-          // VERBATIM (epoch ms) — both are part of the poll credential.
-          ? { _cbFingerprintHash: data._cbFingerprintHash, _cbExpiresAt: data._cbExpiresAt }
           : null;
         startPolling(
           data.device_code,
