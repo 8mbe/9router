@@ -29,7 +29,7 @@ export const ANTHROPIC_API_VERSION = "2023-06-01";
 // (a reverse proxy that records the real request before forwarding it upstream).
 // Re-run that script after a CLI upgrade and refresh the three constants below
 // rather than guessing — providers such as agentrouter gate on this identity.
-export const CLAUDE_CLI_VERSION = "2.1.263";
+export const CLAUDE_CLI_VERSION = "2.1.280";
 export const CLAUDE_SDK_VERSION = "0.112.1";   // X-Stainless-Package-Version
 export const CLAUDE_NODE_VERSION = "v26.3.0";  // X-Stainless-Runtime-Version
 
