@@ -131,6 +131,19 @@ const SESSION_INVALID_CODES = [
 // The run is dead but the session is fine: START a new run and retry once.
 const RUN_INVALID_CODES = ["runid not found", "runid not running", "free_mode_run_fanout"];
 
+/**
+ * A 409 model_locked admission refusal: the account already holds a live
+ * session pinned to a DIFFERENT model. Carries the refusal state so the
+ * caller can release the right slot before re-admitting.
+ */
+class ModelLockedError extends Error {
+  constructor(state) {
+    super(`Codebuff session is locked to ${state.currentModel || "another model"}`);
+    this.name = "ModelLockedError";
+    this.state = state;
+  }
+}
+
 function bodyHasCode(text, codes) {
   const lower = (text || "").toLowerCase();
   return codes.some((c) => lower.includes(c));
@@ -219,14 +232,23 @@ async function admitSession(token, model, proxyOptions, log) {
   }, proxyOptions);
 
   const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`Codebuff session admission failed (${response.status}): ${text.slice(0, 300)}`);
-  }
 
-  let state;
+  let state = null;
   try {
     state = JSON.parse(text);
   } catch {
+    state = null;
+  }
+
+  if (!response.ok) {
+    // 409 model_locked is recoverable: the account holds a live session on
+    // another model, and the hour it already paid for has to be given back
+    // before a new one can be bought. Every other status is terminal here.
+    if (state?.status === "model_locked") throw new ModelLockedError(state);
+    throw new Error(`Codebuff session admission failed (${response.status}): ${text.slice(0, 300)}`);
+  }
+
+  if (!state) {
     throw new Error(`Codebuff session admission returned non-JSON: ${text.slice(0, 200)}`);
   }
 
@@ -256,13 +278,20 @@ async function admitSession(token, model, proxyOptions, log) {
 
 /** DELETE the session to refund the unused part of the purchased hour. */
 async function releaseSession(session, token, proxyOptions) {
-  if (!session?.instanceId || !token) return;
+  if (!token) return;
+  const instanceId = session?.instanceId || null;
   try {
     await controlFetch(`${BASE_URL}${SESSION_PATH}`, {
       method: "DELETE",
-      headers: { ...controlHeaders(token), "x-freebuff-instance-id": session.instanceId },
+      headers: {
+        ...controlHeaders(token),
+        // Omitted when the id is unknown (a restart lost the record, or the
+        // lock refusal carried none): upstream then ends whatever session the
+        // account currently holds, which is exactly the one blocking us.
+        ...(instanceId ? { "x-freebuff-instance-id": instanceId } : {}),
+      },
     }, proxyOptions);
-    dbg("CODEBUFF", `session released ${session.instanceId}`);
+    dbg("CODEBUFF", `session released ${instanceId || "(current)"}`);
   } catch {
     // Best-effort: an unreleased seat just lapses at the end of its hour.
   }
@@ -273,6 +302,26 @@ async function releaseSession(session, token, proxyOptions) {
  * Concurrent requests share one in-flight admission — two admissions would
  * buy (and pay for) two hours.
  */
+async function admitWithLockRecovery(token, model, proxyOptions, log, heldInstanceId) {
+  try {
+    return await admitSession(token, model, proxyOptions, log);
+  } catch (err) {
+    if (!(err instanceof ModelLockedError)) throw err;
+
+    // The account is pinned to another model's session. This happens whenever
+    // we have no local record of it — after a restart, or when a session was
+    // opened outside this process — so it cannot be prevented by bookkeeping
+    // alone and has to be recovered here.
+    const releaseId = err.state.instanceId || heldInstanceId || null;
+    log?.warn?.(
+      "CODEBUFF",
+      `session locked to ${err.state.currentModel || "another model"}; releasing it to switch to ${model} (this buys a new hour)`
+    );
+    await releaseSession({ instanceId: releaseId }, token, proxyOptions);
+    return await admitSession(token, model, proxyOptions, log);
+  }
+}
+
 async function ensureSession(key, token, model, proxyOptions, log, { force = false } = {}) {
   const existing = sessions.get(key);
 
@@ -284,14 +333,18 @@ async function ensureSession(key, token, model, proxyOptions, log, { force = fal
     }
   }
 
-  // Switching model or replacing a dead lease: give the old hour back first.
+  // Switching model or replacing a dead lease: give the old hour back FIRST.
+  // The release has to complete before the new admission is sent — upstream
+  // refuses a second model while the first session is live (409 model_locked),
+  // so firing this off in the background just races the POST.
+  const heldInstanceId = existing && !existing.admitting ? existing.instanceId : null;
   if (existing && !existing.admitting) {
     sessions.delete(key);
-    releaseSession(existing, token, proxyOptions).catch(() => {});
+    await releaseSession(existing, token, proxyOptions);
   }
 
   const placeholder = { admitting: null, token, proxyOptions, lastUsed: Date.now() };
-  const promise = admitSession(token, model, proxyOptions, log)
+  const promise = admitWithLockRecovery(token, model, proxyOptions, log, heldInstanceId)
     .then((session) => {
       const entry = { ...session, token, proxyOptions, lastUsed: Date.now(), admitting: null };
       sessions.set(key, entry);

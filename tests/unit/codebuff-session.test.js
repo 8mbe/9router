@@ -216,3 +216,106 @@ describe("Codebuff session lifecycle", () => {
     expect(callsTo("/admission")).toHaveLength(2);
   });
 });
+
+describe("Codebuff model lock recovery", () => {
+  // Observed in production: the account held a live glm-5.3-flash session and
+  // a gpt-6-luna request 502'd on the admission 409.
+  const LOCKED = () =>
+    new Response(
+      JSON.stringify({
+        status: "model_locked",
+        currentModel: "z-ai/glm-5.3-flash",
+        requestedModel: "openai/gpt-6-luna",
+        accessTier: "full",
+      }),
+      { status: 409 }
+    );
+
+  it("releases the locked session and retries when we hold no local record", async () => {
+    // The restart case: upstream has a live session this process never saw,
+    // so there is nothing local to release before admitting.
+    let admissions = 0;
+    proxyAwareFetch.mockImplementation(async (url, options) => {
+      if (String(url).includes("/admission")) {
+        admissions += 1;
+        return admissions === 1 ? LOCKED() : admitted("inst-new");
+      }
+      if (String(url).includes("/agent-runs")) return started();
+      if (options?.method === "DELETE") return new Response("{}", { status: 200 });
+      return sse();
+    });
+
+    const result = await run(`conn-locked-${Math.random()}`, "openai/gpt-6-luna");
+    expect(result.response.status).toBe(200);
+    expect(admissions).toBe(2);
+
+    const deletes = proxyAwareFetch.mock.calls.filter(([, o]) => o?.method === "DELETE");
+    expect(deletes).toHaveLength(1);
+    // No id is known, so the header is omitted and upstream ends whatever
+    // session the account currently holds.
+    expect(deletes[0][1].headers["x-freebuff-instance-id"]).toBeUndefined();
+  });
+
+  it("releases by the id the refusal names when it carries one", async () => {
+    let admissions = 0;
+    proxyAwareFetch.mockImplementation(async (url, options) => {
+      if (String(url).includes("/admission")) {
+        admissions += 1;
+        if (admissions === 1) {
+          return new Response(
+            JSON.stringify({ status: "model_locked", currentModel: "z-ai/glm-5.3-flash", instanceId: "inst-old" }),
+            { status: 409 }
+          );
+        }
+        return admitted("inst-new");
+      }
+      if (String(url).includes("/agent-runs")) return started();
+      if (options?.method === "DELETE") return new Response("{}", { status: 200 });
+      return sse();
+    });
+
+    await run(`conn-locked-id-${Math.random()}`, "openai/gpt-6-luna");
+    const deletes = proxyAwareFetch.mock.calls.filter(([, o]) => o?.method === "DELETE");
+    expect(deletes[0][1].headers["x-freebuff-instance-id"]).toBe("inst-old");
+  });
+
+  it("finishes releasing the old hour before admitting the new model", async () => {
+    // A background release races the admission POST and upstream answers 409,
+    // so the order of these two calls is the whole fix.
+    const order = [];
+    proxyAwareFetch.mockImplementation(async (url, options) => {
+      if (options?.method === "DELETE") {
+        order.push("delete-start");
+        await new Promise((r) => setTimeout(r, 20));
+        order.push("delete-end");
+        return new Response("{}", { status: 200 });
+      }
+      if (String(url).includes("/admission")) {
+        order.push("admit");
+        return admitted();
+      }
+      if (String(url).includes("/agent-runs")) return started();
+      return sse();
+    });
+
+    const key = `conn-order-${Math.random()}`;
+    await run(key, "z-ai/glm-5.3-flash");
+    order.length = 0;
+    await run(key, "openai/gpt-6-luna");
+
+    expect(order).toEqual(["delete-start", "delete-end", "admit"]);
+  });
+
+  it("gives up honestly when the retry is locked again", async () => {
+    proxyAwareFetch.mockImplementation(async (url, options) => {
+      if (String(url).includes("/admission")) return LOCKED();
+      if (String(url).includes("/agent-runs")) return started();
+      if (options?.method === "DELETE") return new Response("{}", { status: 200 });
+      return sse();
+    });
+
+    // One release and one retry — never a loop against a lock that will not clear.
+    await expect(run(`conn-relocked-${Math.random()}`, "openai/gpt-6-luna")).rejects.toThrow(/locked/i);
+    expect(callsTo("/admission")).toHaveLength(2);
+  });
+});
