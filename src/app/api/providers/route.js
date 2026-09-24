@@ -136,6 +136,7 @@ export async function POST(request) {
       providerSpecificData = {
         prefix: node.prefix,
         apiType: node.apiType,
+        mediaKinds: node.mediaKinds || [],
         baseUrl: node.baseUrl,
         nodeName: node.name,
       };

@@ -162,10 +162,13 @@ export default function MediaProviderKindPage() {
       .then((r) => r.json())
       .then((d) => setConnections(d.connections || []))
       .catch(() => {});
-    if (isEmbedding) {
+    if (kind === "image" || kind === "tts" || kind === "stt" || isEmbedding) {
       fetch("/api/provider-nodes", { cache: "no-store" })
         .then((r) => r.json())
-        .then((d) => setCustomNodes((d.nodes || []).filter((n) => n.type === "custom-embedding")))
+        .then((d) => setCustomNodes((d.nodes || []).filter((n) =>
+          (isEmbedding && n.type === "custom-embedding") ||
+          (n.type === "openai-compatible" && n.mediaKinds?.includes(kind))
+        )))
         .catch(() => {});
     }
     if (supportsCombo) {
@@ -174,7 +177,7 @@ export default function MediaProviderKindPage() {
         .then((d) => setCombos(d.combos || []))
         .catch(() => {});
     }
-  }, [isEmbedding, supportsCombo, kindConfig]);
+  }, [kind, isEmbedding, supportsCombo, kindConfig]);
 
   if (!kindConfig) return notFound();
 
@@ -184,9 +187,9 @@ export default function MediaProviderKindPage() {
   // Map custom nodes to MediaProviderCard shape
   const customProviders = customNodes.map((n) => ({
     id: n.id,
-    name: n.name || "Custom Embedding",
-    color: "#6366F1",
-    textIcon: "CE",
+    name: n.name || "Custom Provider",
+    color: n.type === "custom-embedding" ? "#6366F1" : "#10A37F",
+    textIcon: n.type === "custom-embedding" ? "CE" : "OC",
   }));
 
   const allProviders = [...providers, ...customProviders];

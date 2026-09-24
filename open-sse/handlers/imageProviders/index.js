@@ -12,6 +12,7 @@ import blackForestLabs from "./blackForestLabs.js";
 import runwayml from "./runwayml.js";
 import cloudflareAi from "./cloudflareAi.js";
 import antigravity from "./antigravity.js";
+import openaiCompatNode from "./openaiCompatNode.js";
 
 const ADAPTERS = {
   openai: createOpenAIAdapter("openai"),
@@ -19,6 +20,8 @@ const ADAPTERS = {
   openrouter: createOpenAIAdapter("openrouter"),
   recraft: createOpenAIAdapter("recraft"),
   "vercel-ai-gateway": createOpenAIAdapter("vercel-ai-gateway"),
+  tokenrouter: createOpenAIAdapter("tokenrouter"),
+  venice: createOpenAIAdapter("venice"),
   xai: createOpenAIAdapter("xai"),
   gemini,
   codex,
@@ -35,9 +38,10 @@ const ADAPTERS = {
 };
 
 export function getImageAdapter(provider) {
+  if (provider?.startsWith?.("openai-compatible-")) return openaiCompatNode;
   return ADAPTERS[provider] || null;
 }
 
 export function isImageProvider(provider) {
-  return provider in ADAPTERS;
+  return provider in ADAPTERS || provider?.startsWith?.("openai-compatible-");
 }

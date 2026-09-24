@@ -8,6 +8,7 @@ import openrouter from "./openrouter.js";
 import gemini, { fetchGeminiVoices } from "./gemini.js";
 import xiaomiMimo from "./xiaomi-mimo.js";
 import selfhostedTts from "./selfhostedTts.js";
+import openaiCompatNode from "./openaiCompatNode.js";
 import { FORMAT_HANDLERS } from "./genericFormats.js";
 import { parseModelVoice } from "./_base.js";
 
@@ -25,6 +26,7 @@ const SPECIAL_ADAPTERS = {
 };
 
 export function getTtsAdapter(provider) {
+  if (provider?.startsWith?.("openai-compatible-")) return openaiCompatNode;
   return SPECIAL_ADAPTERS[provider] || null;
 }
 

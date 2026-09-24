@@ -7,6 +7,7 @@ import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { formatLatency } from "@/shared/utils/latency";
+import { inferCompatibleModelKind } from "@/shared/utils/compatibleMedia";
 
 // ── ModelRow ───────────────────────────────────────────────────
 export function ModelRow({ model, fullModel, copied, onCopy, testStatus, latencyMs, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
@@ -125,6 +126,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
   const { copied, copy } = useCopyToClipboard();
   const [modelAliases, setModelAliases] = useState({});
   const [customModels, setCustomModels] = useState([]);
+  const [upstreamModels, setUpstreamModels] = useState([]);
   const [modelTestResults, setModelTestResults] = useState({});
   const [testingModelId, setTestingModelId] = useState(null);
   const [testError, setTestError] = useState("");
@@ -147,6 +149,29 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    if (!kindFilter || !providerId.startsWith("openai-compatible-")) return undefined;
+    let cancelled = false;
+    fetch("/api/providers", { cache: "no-store" })
+      .then((res) => res.json())
+      .then(async (data) => {
+        const connections = (data.connections || []).filter((c) => c.provider === providerId && c.isActive !== false);
+        const lists = await Promise.all(connections.map(async (connection) => {
+          const res = await fetch(`/api/providers/${connection.id}/models?kind=${encodeURIComponent(kindFilter)}`, { cache: "no-store" });
+          return res.ok ? (await res.json()).models || [] : [];
+        }));
+        if (cancelled) return;
+        const seen = new Set();
+        setUpstreamModels(lists.flat().filter((model) => {
+          if (!model?.id || (model.kind || inferCompatibleModelKind(model)) !== kindFilter || seen.has(model.id)) return false;
+          seen.add(model.id);
+          return true;
+        }));
+      })
+      .catch(() => { if (!cancelled) setUpstreamModels([]); });
+    return () => { cancelled = true; };
+  }, [providerId, kindFilter]);
 
   const handleSetAlias = async (modelId, alias) => {
     const fullModel = `${providerAlias}/${modelId}`;
@@ -230,10 +255,10 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
   const myCustomModels = customModels.filter(
     (m) => m.providerAlias === providerAlias
       && getModelKind(m, "llm") === effectiveType
-      && !builtInModels.some((b) => b.id === m.id)
+      && ![...builtInModels, ...upstreamModels].some((b) => b.id === m.id)
   );
 
-  const displayModels = builtInModels;
+  const displayModels = [...builtInModels, ...upstreamModels.filter((m) => !builtInModels.some((b) => b.id === m.id))];
 
   return (
     <>
@@ -259,7 +284,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
                 onDeleteAlias={() => handleDeleteAlias(existingAlias)}
                 testStatus={modelTestResults[model.id]?.status}
               latencyMs={modelTestResults[model.id]?.latencyMs}
-                onTest={() => handleTestModel(model.id)}
+                onTest={kindFilter === "tts" ? undefined : () => handleTestModel(model.id)}
                 isTesting={testingModelId === model.id}
                 isFree={model.isFree}
               />
@@ -277,7 +302,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
               onDeleteAlias={() => handleDeleteCustomModel(model.id)}
               testStatus={modelTestResults[model.id]?.status}
               latencyMs={modelTestResults[model.id]?.latencyMs}
-              onTest={() => handleTestModel(model.id)}
+              onTest={kindFilter === "tts" ? undefined : () => handleTestModel(model.id)}
               isTesting={testingModelId === model.id}
               isCustom
             />

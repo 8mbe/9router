@@ -3,12 +3,14 @@
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
+import CompatibleMediaKindsField from "@/shared/components/CompatibleMediaKindsField";
 
 export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose, isAnthropic }) {
   const [formData, setFormData] = useState({
     name: "",
     prefix: "",
     apiType: "chat",
+    mediaKinds: [],
     baseUrl: "https://api.openai.com/v1",
   });
   const [saving, setSaving] = useState(false);
@@ -23,6 +25,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         name: node.name || "",
         prefix: node.prefix || "",
         apiType: node.apiType || "chat",
+        mediaKinds: node.mediaKinds || [],
         baseUrl: node.baseUrl || (isAnthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"),
       });
     }
@@ -44,6 +47,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
       };
       if (!isAnthropic) {
         payload.apiType = formData.apiType;
+        payload.mediaKinds = formData.mediaKinds;
       }
       await onSave(payload);
     } finally {
@@ -100,6 +104,12 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
             onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
           />
         )}
+        {!isAnthropic && (
+          <CompatibleMediaKindsField
+            value={formData.mediaKinds}
+            onChange={(mediaKinds) => setFormData({ ...formData, mediaKinds })}
+          />
+        )}
         <Input
           label="Base URL"
           value={formData.baseUrl}
@@ -153,6 +163,7 @@ EditCompatibleNodeModal.propTypes = {
     name: PropTypes.string,
     prefix: PropTypes.string,
     apiType: PropTypes.string,
+    mediaKinds: PropTypes.arrayOf(PropTypes.string),
     baseUrl: PropTypes.string,
   }),
   onSave: PropTypes.func.isRequired,

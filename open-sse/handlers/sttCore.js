@@ -179,7 +179,13 @@ export async function handleSttCore({ provider, model, formData, credentials, st
   // sets it, so cloud providers are untouched. Mirrors the custom embedding
   // providers, which already resolve baseUrl the same way.
   const overrideUrl = credentials?.providerSpecificData?.baseUrl;
-  if (overrideUrl) cfg = { ...cfg, baseUrl: String(overrideUrl).replace(/\/+$/, "") };
+  if (overrideUrl) cfg = {
+    ...cfg,
+    baseUrl: provider?.startsWith?.("openai-compatible-")
+      ? `${String(overrideUrl).replace(/\/+$/, "")}/audio/transcriptions`
+      : String(overrideUrl).replace(/\/+$/, ""),
+  };
+  if (!cfg.baseUrl) return createErrorResult(HTTP_STATUS.BAD_REQUEST, `No STT endpoint for provider: ${provider}`);
 
   const token = cfg.authType === "none" ? null : (credentials?.apiKey || credentials?.accessToken);
   if (cfg.authType !== "none" && !token) {

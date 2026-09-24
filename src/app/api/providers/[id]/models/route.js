@@ -533,13 +533,20 @@ export async function GET(request, { params }) {
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for OpenAI compatible provider" }, { status: 400 });
       }
-      const url = `${baseUrl.replace(/\/$/, "")}/models`;
-      const response = await fetch(url, {
+      const requestedKind = new URL(request.url).searchParams.get("kind");
+      const mediaKinds = connection.providerSpecificData?.mediaKinds || [];
+      const kind = mediaKinds.includes(requestedKind) ? requestedKind : null;
+      const modelsUrl = `${baseUrl.replace(/\/$/, "")}/models`;
+      const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${connection.apiKey}`,
+      };
+      let typed = false;
+      let response = kind ? await fetch(`${modelsUrl}/${kind}`, { method: "GET", headers }) : null;
+      if (response?.ok) typed = true;
+      else response = await fetch(modelsUrl, {
         method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${connection.apiKey}`,
-        },
+        headers,
       });
 
       if (!response.ok) {
@@ -552,7 +559,10 @@ export async function GET(request, { params }) {
       }
 
       const data = await response.json();
-      const models = data.data || data.models || [];
+      const models = (data.data || data.models || []).map((model) => {
+        const entry = typeof model === "string" ? { id: model } : model;
+        return typed ? { ...entry, kind } : entry;
+      });
 
       return NextResponse.json({
         provider: connection.provider,

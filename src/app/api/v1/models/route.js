@@ -19,6 +19,7 @@ import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
 import { getCachedUpstream } from "@/lib/modelCatalog/upstreamCache";
+import { inferCompatibleModelKind } from "@/shared/utils/compatibleMedia";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -181,7 +182,7 @@ function inferKindFromUnknownModelId(modelId) {
   return LLM_KIND;
 }
 
-async function fetchCompatibleModelIds(connection) {
+async function fetchCompatibleModelIds(connection, kind = null) {
   if (!connection?.apiKey) return [];
 
   const baseUrl = typeof connection?.providerSpecificData?.baseUrl === "string"
@@ -211,28 +212,39 @@ async function fetchCompatibleModelIds(connection) {
   }
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { ...headers, [INTERNAL_MODELS_FETCH_HEADER]: "1" },
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
+    let typed = false;
+    let response;
+    if (kind && isOpenAICompatibleProvider(connection.provider)) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        response = await fetch(`${baseUrl}/models/${kind}`, {
+          method: "GET", headers: { ...headers, [INTERNAL_MODELS_FETCH_HEADER]: "1" },
+          cache: "no-store", signal: controller.signal,
+        });
+        typed = response.ok;
+      } finally { clearTimeout(timeoutId); }
+    }
+    if (!typed) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        response = await fetch(url, {
+          method: "GET", headers: { ...headers, [INTERNAL_MODELS_FETCH_HEADER]: "1" },
+          cache: "no-store", signal: controller.signal,
+        });
+      } finally { clearTimeout(timeoutId); }
+    }
     if (!response.ok) return [];
-
     const data = await response.json();
     const rawModels = parseOpenAIStyleModels(data);
 
-    return Array.from(
-      new Set(
-        rawModels
-          .map((model) => model?.id || model?.name || model?.model)
-          .filter((modelId) => typeof modelId === "string" && modelId.trim() !== "")
-      )
-    );
+    return rawModels
+      .map((model) => typeof model === "string"
+        ? { id: model }
+        : { ...model, id: model?.id || model?.name || model?.model })
+      .filter((model) => typeof model?.id === "string" && model.id.trim() !== "")
+      .map((model) => typed ? { ...model, kind } : model);
   } catch {
     return [];
   }
@@ -240,9 +252,11 @@ async function fetchCompatibleModelIds(connection) {
 
 // Provider matches kindFilter when its serviceKinds intersect the requested kinds.
 // LLM is the default kind for providers missing serviceKinds.
-function providerMatchesKinds(providerId, kindFilter) {
+function providerMatchesKinds(providerId, kindFilter, connection = null) {
   const provider = AI_PROVIDERS[providerId];
-  const kinds = Array.isArray(provider?.serviceKinds) && provider.serviceKinds.length > 0
+  const kinds = isOpenAICompatibleProvider(providerId)
+    ? [LLM_KIND, ...(connection?.providerSpecificData?.mediaKinds || [])]
+    : Array.isArray(provider?.serviceKinds) && provider.serviceKinds.length > 0
     ? provider.serviceKinds
     : [LLM_KIND];
   return kindFilter.some((k) => kinds.includes(k));
@@ -263,7 +277,7 @@ function comboMatchesKinds(combo, kindFilter) {
  *
  * Returns null when this provider's models come purely from local config.
  */
-async function resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch }) {
+async function resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch, kindFilter }) {
   const enabledModels = conn?.providerSpecificData?.enabledModels;
   // A pinned model list is the account's own answer; upstream is never consulted.
   if (Array.isArray(enabledModels) && enabledModels.length > 0) return null;
@@ -304,11 +318,16 @@ async function resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch }) {
   const baseUrl = typeof conn?.providerSpecificData?.baseUrl === "string"
     ? conn.providerSpecificData.baseUrl.trim().replace(/\/$/, "")
     : "";
-  const modelIds = await getCachedUpstream(`compat:${conn.id}:${baseUrl}`, async () => {
-    const fetched = await fetchCompatibleModelIds(conn);
+  const kind = kindFilter.length === 1 && kindFilter[0] !== LLM_KIND ? kindFilter[0] : null;
+  const models = await getCachedUpstream(`compat:${conn.id}:${baseUrl}:${kind || LLM_KIND}`, async () => {
+    const fetched = await fetchCompatibleModelIds(conn, kind);
     return fetched.length ? fetched : null;
   });
-  return modelIds?.length ? { modelIds } : null;
+  return models?.length ? {
+    modelIds: models.map((m) => m.id),
+    liveModelKindById: new Map(models.map((m) => [m.id, m.kind || inferCompatibleModelKind(m)])),
+    liveCapabilitiesById: new Map(models.filter((m) => m.capabilities).map((m) => [m.id, m.capabilities])),
+  } : null;
 }
 
 /**
@@ -429,16 +448,16 @@ export async function buildModelsList(kindFilter, options = {}) {
     const upstreamByProvider = new Map(
       await Promise.all(
         Array.from(activeConnectionByProvider.entries())
-          .filter(([providerId]) => providerMatchesKinds(providerId, kindFilter))
+          .filter(([providerId, conn]) => providerMatchesKinds(providerId, kindFilter, conn))
           .map(async ([providerId, conn]) => [
             providerId,
-            await resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch }),
+            await resolveUpstreamCatalog(providerId, conn, { skipDynamicFetch, kindFilter }),
           ])
       )
     );
 
     for (const [providerId, conn] of activeConnectionByProvider.entries()) {
-      if (!providerMatchesKinds(providerId, kindFilter)) continue;
+      if (!providerMatchesKinds(providerId, kindFilter, conn)) continue;
 
       const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
       const outputAlias = (

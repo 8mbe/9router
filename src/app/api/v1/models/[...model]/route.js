@@ -37,7 +37,7 @@ function json(data, options = {}) {
  * GET /v1/models/{provider}/{model} - OpenAI-compatible single model lookup.
  * Supported kinds: image, tts, stt, embedding, image-to-text, web.
  */
-export async function GET(_request, { params }) {
+export async function GET(request, { params }) {
   try {
     const { model } = await params;
     const path = Array.isArray(model) ? model : [model];
@@ -45,7 +45,10 @@ export async function GET(_request, { params }) {
     const kindFilter = path.length === 1 ? KIND_SLUG_MAP[identifier] : null;
 
     if (kindFilter) {
-      const data = await buildModelsList(kindFilter);
+      const skipDynamicFetch = request.headers.get("x-9r-internal-models-fetch") === "1";
+      const data = skipDynamicFetch
+        ? await buildModelsList(kindFilter, { skipDynamicFetch: true })
+        : await buildModelsList(kindFilter);
       return json({ object: "list", data });
     }
 

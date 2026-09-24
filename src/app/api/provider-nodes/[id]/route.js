@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { deleteProviderConnectionsByProvider, deleteProviderNode, getProviderConnections, getProviderNodeById, updateProviderConnection, updateProviderNode } from "@/models";
+import { normalizeCompatibleMediaKinds } from "@/shared/utils/compatibleMedia";
 
 // PUT /api/provider-nodes/[id] - Update provider node
 export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, prefix, apiType, baseUrl } = body;
+    const { name, prefix, apiType, baseUrl, mediaKinds } = body;
     const node = await getProviderNodeById(id);
 
     if (!node) {
@@ -56,6 +57,7 @@ export async function PUT(request, { params }) {
 
     if (node.type === "openai-compatible") {
       updates.apiType = apiType;
+      updates.mediaKinds = normalizeCompatibleMediaKinds(mediaKinds ?? node.mediaKinds);
     }
 
     const updated = await updateProviderNode(id, updates);
@@ -67,6 +69,7 @@ export async function PUT(request, { params }) {
           ...(connection.providerSpecificData || {}),
           prefix: prefix.trim(),
           apiType: node.type === "openai-compatible" ? apiType : undefined,
+          mediaKinds: node.type === "openai-compatible" ? updated.mediaKinds : undefined,
           baseUrl: sanitizedBaseUrl,
           nodeName: updated.name,
         }

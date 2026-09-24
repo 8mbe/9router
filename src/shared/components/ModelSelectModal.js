@@ -7,6 +7,7 @@ import ProviderIcon from "./ProviderIcon";
 import CapacityBadges from "./CapacityBadges";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
+import { inferCompatibleModelKind } from "@/shared/utils/compatibleMedia";
 import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias } from "@/shared/constants/providers";
 
 // Provider order: OAuth first, then Free Tier, then API Key (matches dashboard/providers)
@@ -87,7 +88,9 @@ export default function ModelSelectModal({
     if (!kindFilter) return activeProviders;
     return activeProviders.filter((p) => {
       const info = AI_PROVIDERS[p.provider];
-      const kinds = info?.serviceKinds || ["llm"];
+      const kinds = isOpenAICompatibleProvider(p.provider)
+        ? ["llm", ...(p.providerSpecificData?.mediaKinds || [])]
+        : info?.serviceKinds || ["llm"];
       return kinds.includes(kindFilter);
     });
   }, [activeProviders, kindFilter]);
@@ -95,6 +98,7 @@ export default function ModelSelectModal({
   const [searchQuery, setSearchQuery] = useState("");
   const [combos, setCombos] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
+  const [compatibleModelsByProvider, setCompatibleModelsByProvider] = useState({});
   const [customModels, setCustomModels] = useState([]);
   const [disabledModels, setDisabledModels] = useState({});
   // Cursor and Cline expose the usable catalog per account, so the static catalog is
@@ -148,6 +152,30 @@ export default function ModelSelectModal({
   useEffect(() => {
     if (isOpen) fetchProviderNodes();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !kindFilter) return undefined;
+    const connections = filteredActiveProviders.filter((p) => isOpenAICompatibleProvider(p.provider));
+    let cancelled = false;
+    Promise.all(connections.map(async (connection) => {
+      try {
+        const response = await fetch(`/api/providers/${connection.id}/models?kind=${encodeURIComponent(kindFilter)}`, { cache: "no-store" });
+        if (!response.ok) return [connection.provider, []];
+        const data = await response.json();
+        return [connection.provider, Array.isArray(data.models) ? data.models : []];
+      } catch {
+        return [connection.provider, []];
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      const grouped = {};
+      for (const [provider, models] of entries) {
+        grouped[provider] = [...(grouped[provider] || []), ...models];
+      }
+      setCompatibleModelsByProvider(grouped);
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, kindFilter, filteredActiveProviders]);
 
   const fetchCustomModels = async () => {
     try {
@@ -299,8 +327,7 @@ export default function ModelSelectModal({
           };
         }
       } else if (isCustomProvider) {
-        // Custom (openai/anthropic-compatible) providers are LLM-only — skip for typed media kinds
-        if (kindFilter && TYPED_KINDS.has(kindFilter)) return;
+        if (kindFilter && TYPED_KINDS.has(kindFilter) && !isOpenAICompatibleProvider(providerId)) return;
         // Find connection object to get prefix synchronously without waiting for providerNodes fetch
         const connection = activeProviders.find(p => p.provider === providerId);
         const matchedNode = providerNodes.find(node => node.id === providerId);
@@ -320,25 +347,37 @@ export default function ModelSelectModal({
         // Merge custom models registered via /api/models/custom for this provider
         // providerAlias in DB uses the raw providerId, not the display prefix
         const registeredCustom = customModels
-          .filter((m) => m.providerAlias === providerId)
+          .filter((m) => (m.providerAlias === providerId || m.providerAlias === nodePrefix) && getModelKind(m, "llm") === (kindFilter || "llm"))
           .map((m) => ({
             id: m.id,
             name: m.name || m.id,
             value: `${nodePrefix}/${m.id}`,
             isCustom: true,
+            kind: getModelKind(m, "llm"),
           }));
-        const seen = new Set(nodeModels.map((m) => m.value));
-        const mergedModels = [...nodeModels, ...registeredCustom.filter((m) => !seen.has(m.value))];
+        const liveModels = kindFilter
+          ? (compatibleModelsByProvider[providerId] || [])
+              .filter((m) => (m.kind || inferCompatibleModelKind(m)) === kindFilter)
+              .map((m) => ({ id: m.id, name: m.name || m.id, value: `${nodePrefix}/${m.id}`, kind: kindFilter }))
+          : [];
+        const aliasModels = kindFilter ? [] : nodeModels;
+        const seen = new Set();
+        const mergedModels = [...registeredCustom, ...liveModels, ...aliasModels].filter((m) => {
+          if (seen.has(m.value)) return false;
+          seen.add(m.value);
+          return true;
+        });
 
         // Always show compatible providers that are connected, even with no aliases.
         // When no aliases exist, show a placeholder so users know it's available.
-        const modelsToShow = mergedModels.length > 0 ? mergedModels : [{
+        const modelsToShow = mergedModels.length > 0 ? mergedModels : kindFilter ? [] : [{
           id: `__placeholder__${providerId}`,
           name: `${nodePrefix}/model-id`,
           value: `${nodePrefix}/model-id`,
           isPlaceholder: true,
         }];
 
+        if (modelsToShow.length === 0) return;
         groups[providerId] = {
           name: displayName,
           alias: nodePrefix,
@@ -420,7 +459,7 @@ export default function ModelSelectModal({
     });
 
     return groups;
-  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, disabledModels, kindFilter, activeProviders, cursorModels, clineModels, clinepassModels]);
+  }, [filteredActiveProviders, modelAliases, allProviders, providerNodes, customModels, compatibleModelsByProvider, disabledModels, kindFilter, activeProviders, cursorModels, clineModels, clinepassModels]);
 
   // Filter combos by search query (and hide combos when kindFilter is set — combos are LLM-only by design)
   const filteredCombos = useMemo(() => {

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Badge, Button, Input, Modal, Select } from "@/shared/components";
+import CompatibleMediaKindsField from "@/shared/components/CompatibleMediaKindsField";
 
 const VARIANT_CONFIG = {
   openai: {
@@ -40,6 +41,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
     name: "",
     prefix: "",
     ...(config.hasApiType ? { apiType: "chat" } : {}),
+    ...(config.hasApiType ? { mediaKinds: [] } : {}),
     baseUrl: config.defaultBaseUrl,
   });
 
@@ -72,6 +74,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           name: formData.name,
           prefix: formData.prefix,
           ...(config.hasApiType ? { apiType: formData.apiType } : {}),
+          ...(config.hasApiType ? { mediaKinds: formData.mediaKinds } : {}),
           baseUrl: formData.baseUrl,
           type: config.type,
         }),
@@ -156,6 +159,12 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
             options={API_TYPE_OPTIONS}
             value={formData.apiType}
             onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
+          />
+        )}
+        {config.hasApiType && (
+          <CompatibleMediaKindsField
+            value={formData.mediaKinds}
+            onChange={(mediaKinds) => setFormData({ ...formData, mediaKinds })}
           />
         )}
         <Input

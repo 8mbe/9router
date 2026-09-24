@@ -56,6 +56,16 @@ describe("GET /v1/models/{id}", () => {
     expect(mocks.buildModelsList).toHaveBeenCalledWith(["image"]);
   });
 
+  it("stops cross-router recursive fetches for media catalogs", async () => {
+    mocks.buildModelsList.mockResolvedValue([]);
+    const request = new Request("https://router.test/v1/models/image", {
+      headers: { "x-9r-internal-models-fetch": "1" },
+    });
+    const response = await GET(request, params(["image"]));
+    expect(response.status).toBe(200);
+    expect(mocks.buildModelsList).toHaveBeenCalledWith(["image"], { skipDynamicFetch: true });
+  });
+
   it("returns an OpenAI-style model_not_found response for an unknown model", async () => {
     mocks.buildModelsList.mockResolvedValue([chatModel]);
 
