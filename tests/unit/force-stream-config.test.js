@@ -47,7 +47,8 @@ vi.mock("../../open-sse/utils/proxyFetch.js", () => ({
   proxyAwareFetch: vi.fn(),
 }));
 
-vi.mock("../../open-sse/translator/formats/claude.js", () => ({
+vi.mock("../../open-sse/translator/formats/claude.js", async (importOriginal) => ({
+  ...(await importOriginal()),
   normalizeClaudePassthrough: vi.fn(),
 }));
 
@@ -71,6 +72,8 @@ vi.mock("../../open-sse/rtk/index.js", () => ({
 vi.mock("../../open-sse/rtk/headroom.js", () => ({
   compressWithHeadroom: vi.fn(async () => null),
   formatHeadroomLog: vi.fn(() => ""),
+  formatHeadroomSizeLog: vi.fn(() => ""),
+  isHeadroomPhantomSavings: vi.fn(() => false),
 }));
 
 vi.mock("../../open-sse/providers/capabilities.js", () => ({
@@ -149,5 +152,49 @@ describe("forceStream provider config", () => {
 
     expect(executeMock).toHaveBeenCalledTimes(1);
     expect(executeMock.mock.calls[0][0].stream).toBe(true);
+  });
+});
+
+// A missing `stream` means JSON in OpenAI Chat/Responses and Anthropic
+// Messages; AI SDK generateText omits the field and got SSE back.
+describe("stream default when body.stream is missing", () => {
+  beforeEach(() => {
+    executeMock.mockReset();
+    executeMock.mockRejectedValue(new Error("boom"));
+  });
+
+  const BODIES = {
+    openai: { model: "deepseek-chat", messages: [{ role: "user", content: "hello" }] },
+    "openai-responses": { model: "deepseek-chat", input: "hello" },
+    claude: { model: "deepseek-chat", max_tokens: 64, messages: [{ role: "user", content: [{ type: "text", text: "hello" }] }] },
+    gemini: { model: "deepseek-chat", contents: [{ role: "user", parts: [{ text: "hello" }] }] },
+  };
+
+  async function streamFor(format, bodyStream) {
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+    const body = structuredClone(BODIES[format]);
+    if (bodyStream !== undefined) body.stream = bodyStream;
+    await handleChatCore({
+      body,
+      modelInfo: { provider: "deepseek", model: "deepseek-chat" },
+      credentials: { apiKey: "sk-test" },
+      clientRawRequest: { endpoint: "/v1/chat/completions", body, headers: {} },
+      sourceFormatOverride: format,
+      connectionId: "test-connection",
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    return executeMock.mock.calls[0][0].stream;
+  }
+
+  it.each(["openai", "openai-responses", "claude"])("%s: missing stream → JSON", async (format) => {
+    expect(await streamFor(format, undefined)).toBe(false);
+  });
+
+  it.each(["openai", "openai-responses", "claude"])("%s: stream:true still streams", async (format) => {
+    expect(await streamFor(format, true)).toBe(true);
+  });
+
+  it("gemini: streaming stays the default", async () => {
+    expect(await streamFor("gemini", undefined)).toBe(true);
   });
 });

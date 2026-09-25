@@ -32,6 +32,8 @@ import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
 
+const STREAM_DEFAULT_OFF_FORMATS = new Set([FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, FORMATS.CLAUDE]);
+
 /**
  * Core chat handler - shared between SSE and Worker
  * @param {object} options.body - Request body
@@ -131,7 +133,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = PROVIDERS[provider]?.forceStream === true;
-  let stream = providerRequiresStreaming ? true : (body.stream !== false);
+  // OpenAI Chat, OpenAI Responses and Anthropic Messages default `stream` to
+  // false, and their SDKs omit the field on non-streaming calls (AI SDK
+  // generateText, openai/anthropic `create`). Treating a missing field as
+  // streaming answered those clients with SSE they can't parse.
+  const streamDefault = !STREAM_DEFAULT_OFF_FORMATS.has(sourceFormat);
+  let stream = providerRequiresStreaming ? true : (body.stream ?? streamDefault) !== false;
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
   const modelType = getModelType(alias, model);
