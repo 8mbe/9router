@@ -1,12 +1,13 @@
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
-import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, claudeCodeSessionId } from "../providers/shared.js";
+import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, mergeAnthropicBeta, claudeCodeSessionId } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
+import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -164,16 +165,27 @@ export class DefaultExecutor extends BaseExecutor {
     // a node fronting Kimi or GLM answers on its own ids and never matches, so
     // gateways that would choke on unknown beta flags are left untouched.
     const isClaudeModel = typeof model === "string" && /^claude-/.test(model);
+    // Client-sent beta flags (e.g. a newer Claude Code) are unioned in so a
+    // feature the client opted into is not dropped on the way upstream.
+    const clientBeta = credentials?.rawHeaders?.["anthropic-beta"];
     if (model && (this.provider === "claude" || this.provider === "anthropic"
       || (this.provider?.startsWith?.("anthropic-compatible-") && isClaudeModel))) {
-      headers["Anthropic-Beta"] = selectAnthropicBeta(model, body, credentials?.contextMarker);
+      headers["Anthropic-Beta"] = mergeAnthropicBeta(selectAnthropicBeta(model, body, credentials?.contextMarker), clientBeta);
+    } else if (this.provider === "anthropic" && clientBeta) {
+      headers["Anthropic-Beta"] = mergeAnthropicBeta(headers["Anthropic-Beta"], clientBeta);
     }
 
     // Claude Code tags every request with a per-session UUID. Providers that
     // carry the CLI fingerprint need it too, or the identity is incomplete.
-    // A caller-supplied id wins so a forwarded client session stays coherent.
+    // On Claude OAuth the cloaked metadata.user_id already names a session, and
+    // the header has to agree with it; otherwise a caller-supplied id wins so a
+    // forwarded client session stays coherent.
     if (headers["User-Agent"]?.startsWith?.("claude-cli/") && !headers["X-Claude-Code-Session-Id"]) {
-      headers["X-Claude-Code-Session-Id"] = credentials?.sessionId || claudeCodeSessionId();
+      const token = credentials?.accessToken || credentials?.apiKey || "";
+      const metadataSid = this.provider === "claude" && token.includes("sk-ant-oat")
+        ? extractClaudeSessionIdFromUserId(body?.metadata?.user_id)
+        : null;
+      headers["X-Claude-Code-Session-Id"] = metadataSid || credentials?.sessionId || claudeCodeSessionId();
     }
 
     // Strip first-party Claude Code identity headers for non-Anthropic anthropic-compatible upstreams

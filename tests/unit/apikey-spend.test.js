@@ -59,7 +59,8 @@ describe("getApiKeySpend", () => {
 
     // Masked, never the raw secret
     expect(byName["Key A"].apiKeyMasked).not.toBe(a.key);
-    expect(a.key.startsWith(byName["Key A"].apiKeyMasked.replace("***", ""))).toBe(true);
+    const [head, tail] = byName["Key A"].apiKeyMasked.split("***");
+    expect(a.key.startsWith(head) && a.key.endsWith(tail)).toBe(true);
     expect(now).toBeTruthy();
   });
 

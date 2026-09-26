@@ -30,10 +30,10 @@ export async function getCustomModels() {
 }
 
 // Atomic upsert inside transaction to prevent duplicate races.
-// Re-adding an existing model updates caps/name without resetting omitted fields.
+// Re-adding an existing model updates caps/name/transport without resetting omitted fields.
 // `db` is the already-resolved adapter so a batch can run every entry inside one
 // transaction instead of opening one per model.
-function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, contextLength }) {
+function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, contextLength, transport }) {
   const k = customKey(providerAlias, id, type);
   // null clears a previously stored window; undefined leaves it untouched, so a
   // re-add that only sets caps does not wipe a context length found on import.
@@ -45,6 +45,7 @@ function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, co
       ...prev,
       ...(name ? { name } : {}),
       ...(caps ? { caps } : {}),
+      ...(transport ? { transport } : {}),
       ...(hasContext ? { contextLength } : {}),
     };
     db.run(`UPDATE kv SET value = ? WHERE scope = 'customModels' AND key = ?`, [stringifyJson(next), k]);
@@ -53,6 +54,7 @@ function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, co
   const value = stringifyJson({
     providerAlias, id, type, name: name || id,
     ...(caps ? { caps } : {}),
+    ...(transport ? { transport } : {}),
     ...(hasContext ? { contextLength } : {}),
   });
   db.run(`INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?)`, [k, value]);

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCustomModels, addCustomModel, addCustomModels, deleteCustomModel } from "@/models";
-import { CAPACITY_META } from "@/shared/constants/models";
+import { CAPACITY_META, isSttTransport } from "@/shared/constants/models";
 import { normalizeContextLength } from "@/lib/modelProbe/contextLength";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,16 @@ function sanitizeCaps(caps) {
     if (typeof caps[key] === "boolean") clean[key] = caps[key];
   }
   return Object.keys(clean).length ? clean : null;
+}
+
+// Accepted STT transport markers live in the shared whitelist
+// (src/shared/constants/models STT_TRANSPORT_META) — the dashboard transport
+// select and this validator must agree on one set, so neither owns a copy.
+// Unknown or mistyped values are silently dropped, the same policy
+// sanitizeCaps applies to capability keys.
+function sanitizeTransport(transport, type) {
+  if (type !== "stt" || !isSttTransport(transport)) return null;
+  return transport.trim();
 }
 
 // GET /api/models/custom - List all custom models
@@ -29,16 +39,19 @@ export async function GET() {
 // Absent contextLength = leave any stored window alone; explicit null = clear it.
 // An unparseable value is treated as "clear" rather than silently stored.
 function normalizeEntry(raw) {
-  const { providerAlias, id, type, name, caps, contextLength } = raw || {};
+  const { providerAlias, id, type, name, caps, contextLength, transport } = raw || {};
   if (!providerAlias || !id) return null;
+  const cleanType = type || "llm";
   const cleanCaps = sanitizeCaps(caps);
+  const cleanTransport = sanitizeTransport(transport, cleanType);
   const hasContext = contextLength !== undefined;
   return {
     providerAlias,
     id,
-    type: type || "llm",
+    type: cleanType,
     name,
     ...(cleanCaps ? { caps: cleanCaps } : {}),
+    ...(cleanTransport ? { transport: cleanTransport } : {}),
     ...(hasContext ? { contextLength: normalizeContextLength(contextLength) } : {}),
   };
 }
