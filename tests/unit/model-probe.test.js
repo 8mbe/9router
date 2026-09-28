@@ -149,6 +149,45 @@ describe("probeConnectionModel", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("ECONNREFUSED");
   });
+
+  it("retries once when a stale keep-alive socket drops the request", async () => {
+    const socketDrop = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_SOCKET", message: "other side closed" },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(socketDrop)
+      .mockResolvedValueOnce(jsonResponse(200, { choices: [{ message: { content: "hi" }, finish_reason: "stop" }] }));
+
+    const result = await probeConnectionModel(openAiConn, "acme-large", { proxy: {} });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports the socket cause when the retry also drops", async () => {
+    const socketDrop = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_SOCKET", message: "other side closed" },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(socketDrop);
+
+    const result = await probeConnectionModel(openAiConn, "acme-large", { proxy: {} });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("fetch failed (UND_ERR_SOCKET: other side closed)");
+  });
+
+  it("does not retry a refused connection", async () => {
+    const refused = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "ECONNREFUSED", message: "connect ECONNREFUSED 127.0.0.1:1" },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(refused);
+
+    const result = await probeConnectionModel(openAiConn, "acme-large", { proxy: {} });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(result.error).toBe("fetch failed (ECONNREFUSED: connect ECONNREFUSED 127.0.0.1:1)");
+  });
 });
 
 describe("probe job concurrency clamp", () => {

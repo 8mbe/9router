@@ -8,8 +8,38 @@ const DEFAULT_TIMEOUT_MS = 20000;
 // on chain-of-thought before answering, so a 16-token probe reads as a failure.
 const PROBE_MAX_TOKENS = 1024;
 
+// Socket-level drops that mean "the pooled keep-alive connection was already dead",
+// not "the upstream rejected us". undici never retries a POST on its own, so without
+// this a probe that lands on a stale socket fails in a few ms without reaching the
+// upstream. Refused/DNS errors are left out on purpose: retrying those only hides them.
+const TRANSIENT_SOCKET_CODES = new Set(["UND_ERR_SOCKET", "UND_ERR_CLOSED", "ECONNRESET", "EPIPE"]);
+
+function isTransientSocketError(error) {
+  const code = error?.cause?.code || error?.code;
+  return TRANSIENT_SOCKET_CODES.has(code);
+}
+
+/** `fetch failed` alone says nothing; the reason lives on `error.cause`. */
+function describeFetchError(error) {
+  const message = error?.message || "Network error";
+  const cause = error?.cause;
+  if (!cause) return message;
+  const detail = [cause.code, cause.message].filter(Boolean).join(": ");
+  return detail && detail !== message ? `${message} (${detail})` : message;
+}
+
 async function probeFetch(url, options, effectiveProxy) {
   if (!options.signal) options.signal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  try {
+    return await probeFetchOnce(url, options, effectiveProxy);
+  } catch (error) {
+    if (options.signal.aborted || !isTransientSocketError(error)) throw error;
+    // One retry opens a fresh connection; the shared signal keeps the overall deadline.
+    return probeFetchOnce(url, options, effectiveProxy);
+  }
+}
+
+async function probeFetchOnce(url, options, effectiveProxy) {
   if (effectiveProxy?.vercelRelayUrl) {
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
     return proxyAwareFetch(url, options, { vercelRelayUrl: effectiveProxy.vercelRelayUrl });
@@ -195,7 +225,7 @@ export async function probeModelEndpoint({
     const aborted = error?.name === "AbortError" || error?.name === "TimeoutError";
     return {
       ok: false,
-      error: aborted ? `Timed out after ${DEFAULT_TIMEOUT_MS}ms` : (error?.message || "Network error"),
+      error: aborted ? `Timed out after ${DEFAULT_TIMEOUT_MS}ms` : describeFetchError(error),
       status: null,
       latencyMs,
     };
