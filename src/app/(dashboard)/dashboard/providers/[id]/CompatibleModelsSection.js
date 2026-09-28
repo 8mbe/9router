@@ -12,6 +12,8 @@ const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 16;
 const DEFAULT_CONCURRENCY = 4;
 const POLL_INTERVAL_MS = 1200;
+// Distinct failure reasons listed under a model; the rest stay in chip tooltips.
+const MAX_FAILURE_LINES = 3;
 
 function clampConcurrency(value) {
   const n = Number(value);
@@ -145,6 +147,19 @@ function CompatibleModelRow({
   const iconColor = anyOk ? "#22c55e" : anyTested ? "#ef4444" : undefined;
   const contextLabel = formatContextLength(contextLength);
 
+  // A fast upstream rejection (quota, balance, auth) looks like "the test never ran"
+  // when the reason only lives in a tooltip. Show it, grouped so 20 keys hitting the
+  // same quota error read as one line.
+  const failureGroups = [];
+  for (const connection of connections) {
+    const entry = keyStates[connection.id];
+    if (entry?.state !== "failed") continue;
+    const error = entry.error || "failed";
+    let group = failureGroups.find((g) => g.error === error);
+    if (!group) failureGroups.push(group = { error, labels: [] });
+    group.labels.push(shortKeyLabel(connection));
+  }
+
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
       <span
@@ -215,6 +230,24 @@ function CompatibleModelRow({
               );
             })}
           </div>
+        )}
+
+        {failureGroups.length > 0 && (
+          <ul className="mt-1.5 space-y-0.5">
+            {failureGroups.slice(0, MAX_FAILURE_LINES).map(({ error, labels }) => (
+              <li key={error} className="text-[11px] text-red-600 dark:text-red-400 break-words line-clamp-2" title={error}>
+                <span className="font-medium">
+                  {labels.length === 1 ? labels[0] : `${labels.length} keys`}:
+                </span>{" "}
+                {error}
+              </li>
+            ))}
+            {failureGroups.length > MAX_FAILURE_LINES && (
+              <li className="text-[11px] text-text-muted">
+                +{failureGroups.length - MAX_FAILURE_LINES} more — hover a red key for its error
+              </li>
+            )}
+          </ul>
         )}
       </div>
       <button
