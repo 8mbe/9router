@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { hasRejectedClineRefresh } from "open-sse/services/oauthCredentialManager.js";
 import { getProbeHints, orderConnectionsByProbe, recordLiveOutcome } from "@/lib/modelProbe/routingHints";
 import * as log from "../utils/logger.js";
 
@@ -85,6 +86,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
+      if (hasRejectedClineRefresh(c)) return false;
       if (isModelLockActive(c, model)) return false;
       // Antigravity: skip if live quota exhausted for this model
       if (isAntigravity && model && antigravityQuotaCache) {

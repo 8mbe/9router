@@ -80,6 +80,16 @@ describe("selectConnectionsNeedingRefresh", () => {
     expect(list).toHaveLength(0);
   });
 
+  it("stops retrying a rejected Cline refresh token until the account is reconnected", async () => {
+    const { selectConnectionsNeedingRefresh } = await import(
+      "../../src/sse/services/backgroundTokenRefresh.js"
+    );
+    const expired = conn({ provider: "cline", testStatus: "expired", lastErrorType: "token_refresh_failed" });
+    const reconnected = conn({ id: "c2", provider: "cline", testStatus: "active", lastErrorType: null });
+
+    expect(selectConnectionsNeedingRefresh([expired, reconnected], NOW)).toEqual([reconnected]);
+  });
+
   it("selects already-expired oauth connection", async () => {
     const { selectConnectionsNeedingRefresh } = await import(
       "../../src/sse/services/backgroundTokenRefresh.js"

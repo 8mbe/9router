@@ -167,10 +167,12 @@ export async function refreshClineToken(refreshToken, log) {
 
       if (!response.ok) {
         const errorText = await response.text();
+        const failure = classifyOAuthRefreshError(errorText, response.status);
         log?.error?.("TOKEN_REFRESH", "Failed to refresh Cline token", {
           status: response.status,
-          error: errorText,
+          error: failure.code || failure.description,
         });
+        if (failure.permanent) return { error: "invalid_grant" };
         return null;
       }
 

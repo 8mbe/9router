@@ -29,6 +29,12 @@ export function getCredentialExpiryMs(credentials) {
   return parseTimeMs(credentials?.expiresAt ?? credentials?.tokenExpiresAt);
 }
 
+export function hasRejectedClineRefresh(connection) {
+  return (connection?.provider === "cline" || connection?.provider === "clinepass") &&
+    connection.testStatus === "expired" &&
+    connection.lastErrorType === "token_refresh_failed";
+}
+
 export function getCredentialLastRefreshMs(credentials) {
   return parseTimeMs(
     credentials?.lastRefreshAt ??

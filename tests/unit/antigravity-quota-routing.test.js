@@ -309,3 +309,14 @@ describe("Antigravity quota-aware routing", () => {
     expect(getAntigravityQuotaCache().get("ag-optimistic")?.[MODEL]?.remainingPercentage).toBe(90);
   });
 });
+
+describe("Cline authentication routing", () => {
+  it("skips an account whose refresh token was rejected", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "expired", provider: "cline", testStatus: "expired", lastErrorType: "token_refresh_failed", isActive: true },
+      { id: "ready", provider: "cline", testStatus: "active", isActive: true },
+    ]);
+
+    await expect(getProviderCredentials("cline")).resolves.toMatchObject({ connectionId: "ready" });
+  });
+});

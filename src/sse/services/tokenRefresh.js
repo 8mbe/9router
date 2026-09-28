@@ -20,7 +20,8 @@ import {
   formatProviderCredentials as _formatProviderCredentials,
   getAllAccessTokens as _getAllAccessTokens,
   refreshKiroToken as _refreshKiroToken,
-  getRefreshLeadMs as _getRefreshLeadMs
+  getRefreshLeadMs as _getRefreshLeadMs,
+  isUnrecoverableRefreshError,
 } from "open-sse/services/tokenRefresh.js";
 import {
   refreshProviderCredentials as _refreshProviderCredentials,
@@ -243,6 +244,23 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
     });
 
     const newCreds = await _refreshProviderCredentials(provider, creds, log);
+    if ((provider === "cline" || provider === "clinepass") && isUnrecoverableRefreshError(newCreds)) {
+      const message = "Cline sign-in is no longer valid. Sign in again to reconnect this account.";
+      try {
+        const marked = await updateProviderConnection(creds.connectionId, {
+          testStatus: "expired",
+          lastError: message,
+          lastErrorType: "token_refresh_failed",
+          lastErrorAt: new Date().toISOString(),
+          errorCode: 401,
+        }, { expectedRefreshToken: creds.refreshToken });
+        if (marked) log.warn("TOKEN_REFRESH", message, { provider, connectionId: creds.connectionId });
+      } catch (error) {
+        log.warn("TOKEN_REFRESH", "Could not record rejected Cline credentials", {
+          provider, connectionId: creds.connectionId, error: error?.message,
+        });
+      }
+    }
     if (newCreds?.accessToken || newCreds?.apiKey || newCreds?.copilotToken) {
       const mergedCreds = {
         ...newCreds,

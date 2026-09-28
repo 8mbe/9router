@@ -21,6 +21,7 @@ function resetHealthStateOnActivation(existing, patch) {
     lastError: Object.hasOwn(patch, "lastError") ? patch.lastError : null,
     lastErrorAt: Object.hasOwn(patch, "lastErrorAt") ? patch.lastErrorAt : null,
     errorCode: null,
+    lastErrorType: null,
     rateLimitedUntil: null,
     backoffLevel: 0,
   };
@@ -260,13 +261,15 @@ export async function createProviderConnection(data) {
 }
 
 // Critical: OAuth refresh token race — atomic merge inside transaction
-export async function updateProviderConnection(id, data) {
+export async function updateProviderConnection(id, data, options = {}) {
   const db = await getAdapter();
   let result;
   db.transaction(() => {
     const row = db.get(`SELECT * FROM providerConnections WHERE id = ?`, [id]);
     if (!row) { result = null; return; }
     const existing = rowToConn(row);
+    if (options.expectedRefreshToken !== undefined &&
+        existing.refreshToken !== options.expectedRefreshToken) { result = null; return; }
     const normalized = resetHealthStateOnActivation(existing, data);
     const merged = { ...existing, ...normalized, updatedAt: new Date().toISOString() };
     upsert(db, merged);
