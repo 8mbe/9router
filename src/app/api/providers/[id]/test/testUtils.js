@@ -8,13 +8,16 @@ import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
 import {
   refreshProviderCredentials,
   shouldRefreshCredentials,
+  buildRejectedClineRefreshPatch,
+  isClineProvider,
 } from "open-sse/services/oauthCredentialManager.js";
+import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
+import { refreshClineToken } from "open-sse/services/tokenRefresh/providers.js";
 import {
   GEMINI_CONFIG,
   ANTIGRAVITY_CONFIG,
   KIRO_CONFIG,
   CLAUDE_CONFIG,
-  CLINE_CONFIG,
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
@@ -293,26 +296,7 @@ async function refreshOAuthToken(connection) {
     }
 
     if (provider === "cline") {
-      const response = await fetch(CLINE_CONFIG.refreshUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          refreshToken,
-          grantType: "refresh_token",
-          clientType: "extension",
-        }),
-      });
-      if (!response.ok) return null;
-      const payload = await response.json();
-      const data = payload?.data || payload;
-      const expiresIn = data?.expiresAt
-        ? Math.max(1, Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000))
-        : 3600;
-      return {
-        accessToken: data?.accessToken,
-        expiresIn,
-        refreshToken: data?.refreshToken || refreshToken,
-      };
+      return await refreshClineToken(refreshToken, console);
     }
 
     return null;
@@ -327,6 +311,27 @@ function isTokenExpired(connection) {
 }
 
 async function testOAuthConnection(connection, effectiveProxy = null) {
+  // A successful refresh has already rotated the token upstream, so the new tokens are
+  // kept even when the probe that follows fails. Dropping them leaves the consumed
+  // refresh token in the DB and the account needs a new sign-in on the next refresh.
+  let rotatedTokens = null;
+  let signInRequired = false;
+  const refresh = async () => {
+    const tokens = await refreshOAuthToken(connection);
+    if (isUnrecoverableRefreshError(tokens)) {
+      signInRequired = true;
+      return null;
+    }
+    if (tokens?.accessToken) rotatedTokens = tokens;
+    return tokens;
+  };
+
+  const result = await probeOAuthConnection(connection, effectiveProxy, refresh);
+  if (rotatedTokens) return { ...result, refreshed: true, newTokens: rotatedTokens };
+  return signInRequired ? { ...result, signInRequired } : result;
+}
+
+async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
@@ -342,7 +347,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
 
   const tokenExpired = isTokenExpired(connection);
   if (config.refreshable && tokenExpired && connection.refreshToken) {
-    const tokens = await refreshOAuthToken(connection);
+    const tokens = await refreshTokens();
     if (tokens) {
       accessToken = tokens.accessToken;
       refreshed = true;
@@ -363,7 +368,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
     if (initial.valid) return { valid: true, error: null, refreshed, newTokens };
 
     if (initial.status === 401 && config.refreshable && !refreshed && connection.refreshToken) {
-      const tokens = await refreshOAuthToken(connection);
+      const tokens = await refreshTokens();
       if (tokens?.accessToken) {
         const retry = await probeCloudCodeAssistAccess(connection, tokens.accessToken, effectiveProxy);
         if (retry.valid) return { valid: true, error: null, refreshed: true, newTokens: tokens };
@@ -389,7 +394,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
       return initial;
     }
 
-    const tokens = await refreshOAuthToken(connection);
+    const tokens = await refreshTokens();
     if (!tokens?.accessToken) {
       return { valid: false, error: "Token invalid or revoked", refreshed: false };
     }
@@ -423,7 +428,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
     }
 
     if (res.status === 401 && config.refreshable && !refreshed && connection.refreshToken) {
-      const tokens = await refreshOAuthToken(connection);
+      const tokens = await refreshTokens();
       if (tokens) {
         const retryUrl = config.buildUrl ? config.buildUrl(tokens.accessToken) : testUrl;
         const retryHeaders = config.noAuth
@@ -915,6 +920,10 @@ export async function testSingleConnection(id) {
         ...result.newTokens.providerSpecificData,
       };
     }
+  }
+
+  if (!result.valid && result.signInRequired && isClineProvider(connection.provider)) {
+    Object.assign(updateData, buildRejectedClineRefreshPatch());
   }
 
   await updateProviderConnection(id, updateData);

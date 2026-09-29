@@ -29,10 +29,29 @@ export function getCredentialExpiryMs(credentials) {
   return parseTimeMs(credentials?.expiresAt ?? credentials?.tokenExpiresAt);
 }
 
+export const CLINE_SIGN_IN_REQUIRED_MESSAGE =
+  "Cline sign-in is no longer valid. Sign in again to reconnect this account.";
+
+export function isClineProvider(provider) {
+  return provider === "cline" || provider === "clinepass";
+}
+
 export function hasRejectedClineRefresh(connection) {
-  return (connection?.provider === "cline" || connection?.provider === "clinepass") &&
+  return isClineProvider(connection?.provider) &&
     connection.testStatus === "expired" &&
     connection.lastErrorType === "token_refresh_failed";
+}
+
+// Connection patch for a Cline account whose refresh token was rejected. Routing and
+// background refresh skip it until the user signs in again.
+export function buildRejectedClineRefreshPatch() {
+  return {
+    testStatus: "expired",
+    lastError: CLINE_SIGN_IN_REQUIRED_MESSAGE,
+    lastErrorType: "token_refresh_failed",
+    lastErrorAt: new Date().toISOString(),
+    errorCode: 401,
+  };
 }
 
 export function getCredentialLastRefreshMs(credentials) {

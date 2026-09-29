@@ -147,12 +147,14 @@ export async function refreshKimiToken(refreshToken, credentials, log) {
   return refreshAccessToken("kimi", refreshToken, credentials, log);
 }
 
-export async function refreshClineToken(refreshToken, log) {
+// Cline refresh tokens are single-use (WorkOS rotation). Every caller must come
+// through here so concurrent refreshes share one request and one rotated token.
+export async function refreshClineToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
 
   return dedupRefresh("cline", refreshToken, async () => {
     try {
-      const response = await fetch(PROVIDERS.cline?.refreshUrl, {
+      const response = await proxyAwareFetch(PROVIDERS.cline?.refreshUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -163,7 +165,7 @@ export async function refreshClineToken(refreshToken, log) {
           grantType: "refresh_token",
           clientType: "extension",
         }),
-      });
+      }, proxyOptions);
 
       if (!response.ok) {
         const errorText = await response.text();

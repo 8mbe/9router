@@ -26,6 +26,9 @@ import {
 import {
   refreshProviderCredentials as _refreshProviderCredentials,
   shouldRefreshCredentials as _shouldRefreshCredentials,
+  buildRejectedClineRefreshPatch,
+  isClineProvider,
+  CLINE_SIGN_IN_REQUIRED_MESSAGE,
 } from "open-sse/services/oauthCredentialManager.js";
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
@@ -244,17 +247,11 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
     });
 
     const newCreds = await _refreshProviderCredentials(provider, creds, log);
-    if ((provider === "cline" || provider === "clinepass") && isUnrecoverableRefreshError(newCreds)) {
-      const message = "Cline sign-in is no longer valid. Sign in again to reconnect this account.";
+    if (isClineProvider(provider) && isUnrecoverableRefreshError(newCreds)) {
       try {
-        const marked = await updateProviderConnection(creds.connectionId, {
-          testStatus: "expired",
-          lastError: message,
-          lastErrorType: "token_refresh_failed",
-          lastErrorAt: new Date().toISOString(),
-          errorCode: 401,
-        }, { expectedRefreshToken: creds.refreshToken });
-        if (marked) log.warn("TOKEN_REFRESH", message, { provider, connectionId: creds.connectionId });
+        const marked = await updateProviderConnection(creds.connectionId, buildRejectedClineRefreshPatch(),
+          { expectedRefreshToken: creds.refreshToken });
+        if (marked) log.warn("TOKEN_REFRESH", CLINE_SIGN_IN_REQUIRED_MESSAGE, { provider, connectionId: creds.connectionId });
       } catch (error) {
         log.warn("TOKEN_REFRESH", "Could not record rejected Cline credentials", {
           provider, connectionId: creds.connectionId, error: error?.message,
