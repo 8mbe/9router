@@ -22,7 +22,7 @@ import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
-import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
+import { updateProviderCredentials, checkAndRefreshToken, markRefreshTokenRejected } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { resolveAutoCombo } from "../services/autoCombo.js";
@@ -344,6 +344,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
           testStatus: "active"
         });
       },
+      onCredentialsRejected: (rejected) => markRefreshTokenRejected(provider, rejected),
       onRequestSuccess: async () => {
         await clearAccountError(credentials.connectionId, credentials, model, provider);
         // "Consecutive" strikes: a success clears the breaker for this pair.

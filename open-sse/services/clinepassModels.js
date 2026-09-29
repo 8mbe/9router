@@ -1,4 +1,4 @@
-import { buildClineHeaders } from "../shared/clineAuth.js";
+import { buildClineHeaders, toClineOAuthToken } from "../shared/clineAuth.js";
 
 const CLINEPASS_MODELS_ENDPOINT = "https://api.cline.bot/api/v1/models";
 // Cline's curated feed, and the authority on what the free plan covers: /models
@@ -11,7 +11,7 @@ const FETCH_TIMEOUT_MS = 5000;
 /**
  * Build request headers for the ClinePass /models endpoint (Cline's upstream API).
  * - API keys are sent as plain Bearer tokens.
- * - OAuth access tokens must carry the WorkOS `workos:` prefix (handled by buildClineHeaders).
+ * - OAuth access tokens always carry the WorkOS `workos:` prefix.
  */
 function buildModelListHeaders(token, isApiKey) {
   if (isApiKey) {
@@ -20,7 +20,7 @@ function buildModelListHeaders(token, isApiKey) {
       Authorization: `Bearer ${token}`,
     };
   }
-  return buildClineHeaders(token, { Accept: "application/json" });
+  return buildClineHeaders(toClineOAuthToken(token), { Accept: "application/json" });
 }
 
 /**

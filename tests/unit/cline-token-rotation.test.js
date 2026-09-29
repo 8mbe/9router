@@ -104,10 +104,25 @@ describe("Cline refresh token rotation", () => {
     expect(b.refreshToken).toBe("refresh-shared");
   });
 
-  it("returns null from the executor when the refresh token is rejected", async () => {
+  it("reports a rejected refresh token from the executor so chat stops retrying it", async () => {
     global.fetch = vi.fn(async () => jsonResponse({ error: "invalid_grant" }, 400));
     const { getExecutor } = await import("open-sse/executors/index.js");
 
-    await expect(getExecutor("cline").refreshCredentials({ refreshToken: "rt-dead" }, null)).resolves.toBeNull();
+    await expect(getExecutor("cline").refreshCredentials({ refreshToken: "rt-dead" }, null))
+      .resolves.toEqual({ error: "invalid_grant" });
+  });
+
+  it("sends OAuth access tokens with the workos: prefix even when they are not JWTs", async () => {
+    const { getExecutor } = await import("open-sse/executors/index.js");
+    const headers = getExecutor("cline").buildHeaders({ accessToken: "opaque-token" }, true);
+
+    expect(headers.Authorization).toBe("Bearer workos:opaque-token");
+  });
+
+  it("sends ClinePass API keys unchanged", async () => {
+    const { getExecutor } = await import("open-sse/executors/index.js");
+    const headers = getExecutor("cline").buildHeaders({ apiKey: "clp_key" }, true);
+
+    expect(headers.Authorization).toBe("Bearer clp_key");
   });
 });

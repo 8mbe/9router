@@ -30,6 +30,7 @@ export default {
       combined: true,
       header: "Authorization",
       scheme: "bearer",
+      oauthTokenPrefix: "workos",
       hooks: [
         "clineHeaders",
       ],

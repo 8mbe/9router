@@ -21,7 +21,7 @@ import {
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
-import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -172,7 +172,7 @@ export function classifyOAuthProbeResult(res, config, bodyText = "") {
 async function probeClineAccessToken(accessToken) {
   const res = await fetch("https://api.cline.bot/api/v1/users/me", {
     method: "GET",
-    headers: buildClineHeaders(accessToken, {
+    headers: buildClineHeaders(toClineOAuthToken(accessToken), {
       Accept: "application/json",
     }),
   });

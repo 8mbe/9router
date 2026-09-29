@@ -291,7 +291,9 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
   const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
-  await updateProviderConnection(connectionId, {
+  // A Cline account already flagged for sign-in keeps that status. Overwriting it
+  // with "unavailable" would put the dead refresh token back into rotation.
+  await updateProviderConnection(connectionId, hasRejectedClineRefresh(conn) ? lockUpdate : {
     ...lockUpdate,
     testStatus: "unavailable",
     lastError: reason,

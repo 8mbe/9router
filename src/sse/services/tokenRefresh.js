@@ -225,6 +225,26 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
  *   (used by background scheduler which applies a larger lead). Request path omits this.
  * @returns {Promise<object>} updated credentials object
  */
+/**
+ * Flag a Cline account whose refresh token was rejected so routing and background
+ * refresh skip it until the user signs in again. The write only lands while the DB
+ * still holds that token; a concurrent refresh that already rotated it wins.
+ */
+export async function markRefreshTokenRejected(provider, credentials) {
+  if (!isClineProvider(provider)) return;
+  const connectionId = credentials?.connectionId || credentials?.id;
+  if (!connectionId || !credentials?.refreshToken) return;
+  try {
+    const marked = await updateProviderConnection(connectionId, buildRejectedClineRefreshPatch(),
+      { expectedRefreshToken: credentials.refreshToken });
+    if (marked) log.warn("TOKEN_REFRESH", CLINE_SIGN_IN_REQUIRED_MESSAGE, { provider, connectionId });
+  } catch (error) {
+    log.warn("TOKEN_REFRESH", "Could not record rejected Cline credentials", {
+      provider, connectionId, error: error?.message,
+    });
+  }
+}
+
 export async function checkAndRefreshToken(provider, credentials, options = {}) {
   let creds = { ...credentials };
   if (!creds.connectionId && creds.id) {
@@ -247,17 +267,7 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
     });
 
     const newCreds = await _refreshProviderCredentials(provider, creds, log);
-    if (isClineProvider(provider) && isUnrecoverableRefreshError(newCreds)) {
-      try {
-        const marked = await updateProviderConnection(creds.connectionId, buildRejectedClineRefreshPatch(),
-          { expectedRefreshToken: creds.refreshToken });
-        if (marked) log.warn("TOKEN_REFRESH", CLINE_SIGN_IN_REQUIRED_MESSAGE, { provider, connectionId: creds.connectionId });
-      } catch (error) {
-        log.warn("TOKEN_REFRESH", "Could not record rejected Cline credentials", {
-          provider, connectionId: creds.connectionId, error: error?.message,
-        });
-      }
-    }
+    if (isUnrecoverableRefreshError(newCreds)) await markRefreshTokenRejected(provider, creds);
     if (newCreds?.accessToken || newCreds?.apiKey || newCreds?.copilotToken) {
       const mergedCreds = {
         ...newCreds,

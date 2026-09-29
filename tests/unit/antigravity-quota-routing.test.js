@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   resolveConnectionProxyConfig: vi.fn(),
   getAntigravityUsage: vi.fn(),
+  updateProviderConnection: vi.fn(),
 }));
 
 vi.mock("@/lib/localDb", () => ({
@@ -12,7 +13,7 @@ vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
   getProxyPools: vi.fn(),
   validateApiKey: vi.fn(),
-  updateProviderConnection: vi.fn(),
+  updateProviderConnection: mocks.updateProviderConnection,
 }));
 vi.mock("@/lib/network/connectionProxy", () => ({
   resolveConnectionProxyConfig: mocks.resolveConnectionProxyConfig,
@@ -28,7 +29,7 @@ vi.mock("open-sse/services/usage/google.js", () => ({
 vi.mock("@/sse/utils/logger.js", () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }));
 
 const { getAntigravityQuotaCache, handleAntigravityQuotaError, refreshAntigravityQuota, clearAntigravityStrikes } = await import("@/sse/services/antigravityQuota.js");
-const { getProviderCredentials } = await import("@/sse/services/auth.js");
+const { getProviderCredentials, markAccountUnavailable } = await import("@/sse/services/auth.js");
 
 const MODEL = "claude-opus-4-6-thinking";
 const FUTURE_RESET = "2026-09-01T00:00:00.000Z";
@@ -318,5 +319,17 @@ describe("Cline authentication routing", () => {
     ]);
 
     await expect(getProviderCredentials("cline")).resolves.toMatchObject({ connectionId: "ready" });
+  });
+
+  it("keeps the sign-in flag when a request with the rejected account fails", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      { id: "expired", provider: "cline", testStatus: "expired", lastErrorType: "token_refresh_failed", isActive: true },
+    ]);
+
+    await markAccountUnavailable("expired", 401, "Unauthorized", "cline", "cline-free/model");
+
+    const [, patch] = mocks.updateProviderConnection.mock.calls.at(-1);
+    expect(patch).not.toHaveProperty("testStatus");
+    expect(patch).not.toHaveProperty("lastError");
   });
 });

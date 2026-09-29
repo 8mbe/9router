@@ -16,6 +16,16 @@ export function getClineAccessToken(token) {
   return isWorkOsJwt ? `workos:${trimmed}` : trimmed;
 }
 
+// Cline OAuth access tokens always go out as `workos:<token>`, which is what Cline's
+// own client does. Don't guess from the token's shape: a refreshed token that isn't
+// `eyJ…` would otherwise be sent bare and rejected with 401.
+export function toClineOAuthToken(token) {
+  if (typeof token !== "string") return "";
+  const trimmed = token.trim();
+  if (!trimmed) return "";
+  return trimmed.toLowerCase().startsWith("workos:") ? trimmed : `workos:${trimmed}`;
+}
+
 export function getClineAuthorizationHeader(token) {
   const accessToken = getClineAccessToken(token);
   return accessToken ? `Bearer ${accessToken}` : "";

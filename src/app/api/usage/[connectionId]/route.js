@@ -4,6 +4,7 @@ import "open-sse/index.js";
 import { getProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
 import { getUsageForProvider } from "open-sse/services/usage.js";
 import { getExecutor } from "open-sse/executors/index.js";
+import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { USAGE_APIKEY_PROVIDERS } from "@/shared/constants/providers";
 
@@ -47,7 +48,7 @@ export async function refreshAndUpdateCredentials(connection, force = false, pro
   // Use executor's refreshCredentials method (with optional proxy)
   const refreshResult = await executor.refreshCredentials(credentials, console, proxyOptions);
 
-  if (!refreshResult) {
+  if (!refreshResult || isUnrecoverableRefreshError(refreshResult)) {
     // Refresh failed but we still have an accessToken — try with existing token
     if (connection.accessToken) {
       return { connection, refreshed: false };

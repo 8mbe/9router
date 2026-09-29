@@ -3,7 +3,7 @@ import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, mergeAnthropicBeta, claudeCodeSessionId } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
-import { buildClineHeaders } from "../shared/clineAuth.js";
+import { buildClineHeaders, toClineOAuthToken } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { refreshClineToken } from "../services/tokenRefresh/providers.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
@@ -25,10 +25,16 @@ function setAuth(headers, spec, token) {
 }
 
 // Resolve auth onto headers from a descriptor.
+// Cline OAuth tokens need the `workos:` prefix; API keys (ClinePass) go out as-is.
+function combinedAuthToken(desc, credentials) {
+  if (credentials.apiKey) return credentials.apiKey;
+  return desc.oauthTokenPrefix === "workos" ? toClineOAuthToken(credentials.accessToken) : credentials.accessToken;
+}
+
 function applyAuth(headers, desc, credentials) {
   if (desc.combined) {
     // combined providers always set the header (legacy behavior, incl. noAuth → "Bearer undefined")
-    setAuth(headers, desc, credentials.apiKey || credentials.accessToken);
+    setAuth(headers, desc, combinedAuthToken(desc, credentials));
     if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     return;
   }
@@ -245,8 +251,8 @@ export class DefaultExecutor extends BaseExecutor {
       iflow: () => this.refreshIflow(credentials.refreshToken, proxyOptions),
       gemini: () => this.refreshFromGrant(credentials, proxyOptions),
       kiro: () => this.refreshKiro(credentials.refreshToken, proxyOptions),
-      cline: () => this.refreshCline(credentials.refreshToken, proxyOptions),
-      clinepass: () => this.refreshCline(credentials.refreshToken, proxyOptions),
+      cline: () => this.refreshCline(credentials.refreshToken, log, proxyOptions),
+      clinepass: () => this.refreshCline(credentials.refreshToken, log, proxyOptions),
       kimi: () => this.refreshKimi(credentials, proxyOptions),
       "kimi-coding": () => this.refreshKimi(credentials, proxyOptions),
       kilocode: () => this.refreshKilocode(credentials.refreshToken, proxyOptions)
@@ -257,7 +263,7 @@ export class DefaultExecutor extends BaseExecutor {
 
     try {
       const result = await refresher();
-      if (result) log?.info?.("TOKEN", `${this.provider} refreshed`);
+      if (result?.accessToken) log?.info?.("TOKEN", `${this.provider} refreshed`);
       return result;
     } catch (error) {
       log?.error?.("TOKEN", `${this.provider} refresh error: ${error.message}`);
@@ -310,9 +316,10 @@ export class DefaultExecutor extends BaseExecutor {
     return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken || refreshToken, expiresIn: tokens.expiresIn };
   }
 
-  async refreshCline(refreshToken, proxyOptions = null) {
-    const result = await refreshClineToken(refreshToken, null, proxyOptions);
-    return result?.accessToken ? result : null;
+  // Returns { error: "invalid_grant" } when Cline rejects the refresh token, so callers
+  // can stop retrying and ask for a new sign-in.
+  async refreshCline(refreshToken, log, proxyOptions = null) {
+    return refreshClineToken(refreshToken, log, proxyOptions);
   }
 
   // CLIProxyAPI DeviceFlowClient.RefreshToken — form body + X-Msh-* headers + stable device_id
