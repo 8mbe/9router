@@ -22,7 +22,7 @@ import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
-import { updateProviderCredentials, checkAndRefreshToken, markRefreshTokenRejected } from "../services/tokenRefresh.js";
+import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { resolveAutoCombo } from "../services/autoCombo.js";
@@ -273,7 +273,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastHeaders = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
+    const requestedModel = contextMarker ? `${model}[${contextMarker}]` : model;
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel });
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -335,6 +336,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       pxpipeTransform: chatSettings.pxpipeEnabled ? await getPxpipeTransform() : null,
       onPxpipeEvent: appendPxpipeEvent,
       providerThinking,
+      // Per-provider user overrides (custom headers / connect timeout) from settings
+      providerOverrides: (chatSettings.providerOverrides || {})[provider] || null,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {
@@ -344,7 +347,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
           testStatus: "active"
         });
       },
-      onCredentialsRejected: (rejected) => markRefreshTokenRejected(provider, rejected),
       onRequestSuccess: async () => {
         await clearAccountError(credentials.connectionId, credentials, model, provider);
         // "Consecutive" strikes: a success clears the breaker for this pair.

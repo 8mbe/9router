@@ -222,11 +222,11 @@
     "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
     "format": "openai-responses",
     "forceStream": true,
-    "cliVersion": "0.155.0",
+    "cliVersion": "0.159.0",
     "headers": {
       "originator": "codex_cli_rs",
-      "User-Agent": "codex_cli_rs/0.155.0",
-      "version": "0.155.0"
+      "User-Agent": "codex_cli_rs/0.159.0",
+      "version": "0.159.0"
     },
     "usage": {
       "url": "https://chatgpt.com/backend-api/wham/usage",
@@ -438,13 +438,13 @@
     "modelsUrl": "https://cli-chat-proxy.grok.com/v1/models",
     "userUrl": "https://cli-chat-proxy.grok.com/v1/user",
     "billingUrl": "https://cli-chat-proxy.grok.com/v1/billing",
-    "clientVersion": "0.2.99",
+    "clientVersion": "1.0.44",
     "clientIdentifier": "grok-shell",
     "tokenAuth": "xai-grok-cli",
     "headers": {
-      "User-Agent": "grok-shell/0.2.99 (linux; x86_64)",
+      "User-Agent": "grok-shell/1.0.44 (linux; x86_64)",
       "x-grok-client-identifier": "grok-shell",
-      "x-grok-client-version": "0.2.99"
+      "x-grok-client-version": "1.0.44"
     },
     "usage": {
       "url": "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
@@ -1137,5 +1137,47 @@
     "baseUrl": "https://api.b.ai/v1/chat/completions",
     "validateUrl": "https://api.b.ai/v1/models",
     "format": "openai"
+  },
+  "muse": {
+    "baseUrl": "https://api.meta.ai/v1/chat/completions",
+    "validateUrl": "https://api.meta.ai/v1/models",
+    "modelsUrl": "https://api.meta.ai/v1/models",
+    "auth": {
+      "combined": true,
+      "header": "Authorization",
+      "scheme": "bearer",
+      "hooks": [
+        "museHeaders"
+      ]
+    },
+    "format": "openai",
+    "clientId": "1031625952748946",
+    "tokenUrl": "https://auth.meta.com/oidc/device/token/",
+    "transports": [
+      {
+        "format": "openai",
+        "baseUrl": "https://api.meta.ai/v1/chat/completions",
+        "auth": {
+          "combined": true,
+          "header": "Authorization",
+          "scheme": "bearer",
+          "hooks": [
+            "museHeaders"
+          ]
+        }
+      },
+      {
+        "format": "openai-responses",
+        "baseUrl": "https://api.meta.ai/v1/responses",
+        "auth": {
+          "combined": true,
+          "header": "Authorization",
+          "scheme": "bearer",
+          "hooks": [
+            "museHeaders"
+          ]
+        }
+      }
+    ]
   }
 }

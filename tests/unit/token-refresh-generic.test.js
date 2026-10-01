@@ -136,21 +136,4 @@ describe("Cline refresh", () => {
     expect(out.refreshToken).toBe("cline-rot");
     expect(out.expiresIn).toBeGreaterThan(0);
   });
-
-  it("reports a rejected refresh token as a permanent auth failure", async () => {
-    mockFetchOnce({ status: 400, error: '{"error":"Failed to refresh token: invalid_grant"}' },
-      { ok: false, status: 400 });
-    const { refreshTokenByProvider } = await import("open-sse/services/tokenRefresh.js");
-
-    await expect(refreshTokenByProvider("cline", { refreshToken: "revoked" })).resolves.toEqual({
-      error: "invalid_grant",
-    });
-  });
-
-  it("keeps server failures retryable", async () => {
-    mockFetchOnce({ error: "upstream unavailable" }, { ok: false, status: 503 });
-    const { refreshTokenByProvider } = await import("open-sse/services/tokenRefresh.js");
-
-    await expect(refreshTokenByProvider("cline", { refreshToken: "temporary" })).resolves.toBeNull();
-  });
 });

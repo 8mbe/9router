@@ -3,7 +3,7 @@
 
 import * as log from "../utils/logger.js";
 import { getRefreshLeadMs } from "open-sse/services/tokenRefresh.js";
-import { getCredentialExpiryMs, hasRejectedClineRefresh } from "open-sse/services/oauthCredentialManager.js";
+import { getCredentialExpiryMs } from "open-sse/services/oauthCredentialManager.js";
 
 /** Refresh when expiry is within 30 minutes (or the provider on-request lead, whichever larger). */
 export const BACKGROUND_REFRESH_LEAD_MS = 30 * 60 * 1000;
@@ -55,7 +55,6 @@ export function selectConnectionsNeedingRefresh(connections, nowMs = Date.now())
     const authType = String(conn.authType || "").toLowerCase().replace(/_/g, "");
     if (authType !== "oauth") continue;
     if (!conn.refreshToken) continue;
-    if (hasRejectedClineRefresh(conn)) continue;
 
     const expiresAtMs = getCredentialExpiryMs(conn);
     if (expiresAtMs === null) continue;

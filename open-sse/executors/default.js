@@ -3,9 +3,8 @@ import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, selectAnthropicBeta, mergeAnthropicBeta, claudeCodeSessionId } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
-import { buildClineHeaders, toClineOAuthToken } from "../shared/clineAuth.js";
+import { buildClineHeaders } from "../shared/clineAuth.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import { refreshClineToken } from "../services/tokenRefresh/providers.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
@@ -25,16 +24,10 @@ function setAuth(headers, spec, token) {
 }
 
 // Resolve auth onto headers from a descriptor.
-// Cline OAuth tokens need the `workos:` prefix; API keys (ClinePass) go out as-is.
-function combinedAuthToken(desc, credentials) {
-  if (credentials.apiKey) return credentials.apiKey;
-  return desc.oauthTokenPrefix === "workos" ? toClineOAuthToken(credentials.accessToken) : credentials.accessToken;
-}
-
 function applyAuth(headers, desc, credentials) {
   if (desc.combined) {
     // combined providers always set the header (legacy behavior, incl. noAuth → "Bearer undefined")
-    setAuth(headers, desc, combinedAuthToken(desc, credentials));
+    setAuth(headers, desc, credentials.apiKey || credentials.accessToken);
     if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     return;
   }
@@ -48,6 +41,9 @@ function applyAuth(headers, desc, credentials) {
 const HEADER_HOOKS = {
   // Stable device_id from OAuth connection (CLIProxyAPI KimiTokenStorage.DeviceID)
   kimiHeaders: (h, c) => Object.assign(h, buildKimiHeaders(c?.providerSpecificData?.deviceId)),
+  // Muse: x-api-version only on subscription (minted key) requests — plain
+  // Model API keys already work without it
+  museHeaders: (h, c) => { if (c?.accessToken && !c?.apiKey) h["x-api-version"] = "1.0.0"; },
   clineHeaders: (h, c) => Object.assign(h, buildClineHeaders(c.apiKey || c.accessToken)),
   kilocodeOrg: (h, c) => { if (c.providerSpecificData?.orgId) h["X-Kilocode-OrganizationID"] = c.providerSpecificData.orgId; },
 };
@@ -251,8 +247,8 @@ export class DefaultExecutor extends BaseExecutor {
       iflow: () => this.refreshIflow(credentials.refreshToken, proxyOptions),
       gemini: () => this.refreshFromGrant(credentials, proxyOptions),
       kiro: () => this.refreshKiro(credentials.refreshToken, proxyOptions),
-      cline: () => this.refreshCline(credentials.refreshToken, log, proxyOptions),
-      clinepass: () => this.refreshCline(credentials.refreshToken, log, proxyOptions),
+      cline: () => this.refreshCline(credentials.refreshToken, proxyOptions),
+      clinepass: () => this.refreshCline(credentials.refreshToken, proxyOptions),
       kimi: () => this.refreshKimi(credentials, proxyOptions),
       "kimi-coding": () => this.refreshKimi(credentials, proxyOptions),
       kilocode: () => this.refreshKilocode(credentials.refreshToken, proxyOptions)
@@ -263,7 +259,7 @@ export class DefaultExecutor extends BaseExecutor {
 
     try {
       const result = await refresher();
-      if (result?.accessToken) log?.info?.("TOKEN", `${this.provider} refreshed`);
+      if (result) log?.info?.("TOKEN", `${this.provider} refreshed`);
       return result;
     } catch (error) {
       log?.error?.("TOKEN", `${this.provider} refresh error: ${error.message}`);
@@ -316,10 +312,22 @@ export class DefaultExecutor extends BaseExecutor {
     return { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken || refreshToken, expiresIn: tokens.expiresIn };
   }
 
-  // Returns { error: "invalid_grant" } when Cline rejects the refresh token, so callers
-  // can stop retrying and ask for a new sign-in.
-  async refreshCline(refreshToken, log, proxyOptions = null) {
-    return refreshClineToken(refreshToken, log, proxyOptions);
+  async refreshCline(refreshToken, proxyOptions = null) {
+    const response = await proxyAwareFetch(PROVIDERS.cline.refreshUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ refreshToken, grantType: "refresh_token", clientType: "extension" })
+    }, proxyOptions);
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const data = payload?.data || payload;
+    const expiresAtIso = data?.expiresAt;
+    const expiresIn = expiresAtIso ? Math.max(1, Math.floor((new Date(expiresAtIso).getTime() - Date.now()) / 1000)) : undefined;
+    let accessToken = data?.accessToken;
+    if (accessToken && !accessToken.startsWith("workos:")) {
+      accessToken = `workos:${accessToken}`;
+    }
+    return { accessToken, refreshToken: data?.refreshToken || refreshToken, expiresIn };
   }
 
   // CLIProxyAPI DeviceFlowClient.RefreshToken — form body + X-Msh-* headers + stable device_id

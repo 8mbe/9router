@@ -1,6 +1,6 @@
 // Re-export from open-sse with local logger
 import * as log from "../utils/logger.js";
-import { updateProviderConnection } from "../../lib/localDb.js";
+import { getProviderConnectionById, updateProviderConnection } from "../../lib/localDb.js";
 import {
   getProjectIdForConnection,
   invalidateProjectId,
@@ -20,15 +20,11 @@ import {
   formatProviderCredentials as _formatProviderCredentials,
   getAllAccessTokens as _getAllAccessTokens,
   refreshKiroToken as _refreshKiroToken,
-  getRefreshLeadMs as _getRefreshLeadMs,
-  isUnrecoverableRefreshError,
+  getRefreshLeadMs as _getRefreshLeadMs
 } from "open-sse/services/tokenRefresh.js";
 import {
   refreshProviderCredentials as _refreshProviderCredentials,
   shouldRefreshCredentials as _shouldRefreshCredentials,
-  buildRejectedClineRefreshPatch,
-  isClineProvider,
-  CLINE_SIGN_IN_REQUIRED_MESSAGE,
 } from "open-sse/services/oauthCredentialManager.js";
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
@@ -225,30 +221,29 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
  *   (used by background scheduler which applies a larger lead). Request path omits this.
  * @returns {Promise<object>} updated credentials object
  */
-/**
- * Flag a Cline account whose refresh token was rejected so routing and background
- * refresh skip it until the user signs in again. The write only lands while the DB
- * still holds that token; a concurrent refresh that already rotated it wins.
- */
-export async function markRefreshTokenRejected(provider, credentials) {
-  if (!isClineProvider(provider)) return;
-  const connectionId = credentials?.connectionId || credentials?.id;
-  if (!connectionId || !credentials?.refreshToken) return;
-  try {
-    const marked = await updateProviderConnection(connectionId, buildRejectedClineRefreshPatch(),
-      { expectedRefreshToken: credentials.refreshToken });
-    if (marked) log.warn("TOKEN_REFRESH", CLINE_SIGN_IN_REQUIRED_MESSAGE, { provider, connectionId });
-  } catch (error) {
-    log.warn("TOKEN_REFRESH", "Could not record rejected Cline credentials", {
-      provider, connectionId, error: error?.message,
-    });
-  }
-}
-
 export async function checkAndRefreshToken(provider, credentials, options = {}) {
   let creds = { ...credentials };
   if (!creds.connectionId && creds.id) {
     creds.connectionId = creds.id;
+  }
+
+  // Adopt latest DB tokens: OpenAI rotates the refresh token on every refresh, and
+  // refreshing with a stale snapshot (reuse) revokes the whole session → account logout.
+  if (creds.connectionId) {
+    const latest = await getProviderConnectionById(creds.connectionId).catch(() => null);
+    const latestRefreshMs = Date.parse(latest?.lastRefreshAt || "");
+    const credsRefreshMs = Date.parse(creds.lastRefreshAt || "");
+    const dbIsNewer = Number.isFinite(latestRefreshMs)
+      && (!Number.isFinite(credsRefreshMs) || latestRefreshMs > credsRefreshMs);
+    if (dbIsNewer && latest.refreshToken && latest.refreshToken !== creds.refreshToken) {
+      creds = {
+        ...creds,
+        refreshToken: latest.refreshToken,
+        accessToken: latest.accessToken || creds.accessToken,
+        expiresAt: latest.expiresAt || latest.tokenExpiresAt || creds.expiresAt,
+        lastRefreshAt: latest.lastRefreshAt || creds.lastRefreshAt,
+      };
+    }
   }
 
   const force = options?.force === true;
@@ -267,7 +262,6 @@ export async function checkAndRefreshToken(provider, credentials, options = {}) 
     });
 
     const newCreds = await _refreshProviderCredentials(provider, creds, log);
-    if (isUnrecoverableRefreshError(newCreds)) await markRefreshTokenRejected(provider, creds);
     if (newCreds?.accessToken || newCreds?.apiKey || newCreds?.copilotToken) {
       const mergedCreds = {
         ...newCreds,

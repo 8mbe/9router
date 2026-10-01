@@ -1,17 +1,18 @@
-import { buildClineHeaders, toClineOAuthToken } from "../shared/clineAuth.js";
+import { buildClineHeaders } from "../shared/clineAuth.js";
 
 const CLINEPASS_MODELS_ENDPOINT = "https://api.cline.bot/api/v1/models";
-// Cline's curated feed, and the authority on what the free plan covers: /models
-// lists what the gateway can route but says nothing about who pays, and the
-// `cline-free/*` ids are not even in it. Without this call the free tier looks
-// emptier than it is.
-const CLINE_RECOMMENDED_ENDPOINT = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
+// Cline's free tier is published here, not in /api/v1/models: the catalog
+// endpoint carries no `cline-free/*` ids at all. Cline's own SDK calls this
+// feed unauthenticated (sdk/packages/core/src/services/llms/cline-recommended-models.ts),
+// so no Authorization header is sent — adding one would only make the request
+// fail on a header the endpoint ignores.
+const CLINE_RECOMMENDED_MODELS_ENDPOINT = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
 const FETCH_TIMEOUT_MS = 5000;
 
 /**
  * Build request headers for the ClinePass /models endpoint (Cline's upstream API).
  * - API keys are sent as plain Bearer tokens.
- * - OAuth access tokens always carry the WorkOS `workos:` prefix.
+ * - OAuth access tokens must carry the WorkOS `workos:` prefix (handled by buildClineHeaders).
  */
 function buildModelListHeaders(token, isApiKey) {
   if (isApiKey) {
@@ -20,14 +21,14 @@ function buildModelListHeaders(token, isApiKey) {
       Authorization: `Bearer ${token}`,
     };
   }
-  return buildClineHeaders(toClineOAuthToken(token), { Accept: "application/json" });
+  return buildClineHeaders(token, { Accept: "application/json" });
 }
 
 /**
  * Internal: fetch the raw model list from Cline's /models endpoint.
  * Returns the parsed array or null on any failure.
  */
-async function fetchClineRawModels(credentials, endpoint = CLINEPASS_MODELS_ENDPOINT) {
+async function fetchClineRawModels(credentials) {
   const isApiKey = Boolean(credentials?.apiKey);
   const token = isApiKey ? credentials.apiKey : credentials?.accessToken;
   if (!token) return null;
@@ -38,7 +39,7 @@ async function fetchClineRawModels(credentials, endpoint = CLINEPASS_MODELS_ENDP
   try {
     const headers = buildModelListHeaders(token, isApiKey);
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(CLINEPASS_MODELS_ENDPOINT, {
       method: "GET",
       headers,
       signal: controller.signal,
@@ -47,8 +48,7 @@ async function fetchClineRawModels(credentials, endpoint = CLINEPASS_MODELS_ENDP
     if (!response.ok) return null;
 
     const json = await response.json();
-    // /models answers {data:[...]}, the recommended feed {recommended,free,...}.
-    const rawList = Array.isArray(json) ? json : (json?.data ?? json?.free);
+    const rawList = Array.isArray(json) ? json : json?.data;
     return Array.isArray(rawList) ? rawList : null;
   } catch {
     return null;
@@ -79,41 +79,67 @@ export async function resolveClinepassModels(credentials) {
 }
 
 /**
- * Fetch Cline's live model catalog: everything /models routes, plus the
- * `cline-free/*` ids that only the recommended feed knows about. Unlike
- * resolveClinepassModels, nothing is filtered by prefix.
+ * Fetch Cline's recommended-models feed and return only its `free[]` tier.
+ * Returns null on any failure — the free tier is additive, so a dead feed must
+ * never take the /api/v1/models catalog down with it.
+ * @param {{accessToken?: string, apiKey?: string}} credentials
+ * @returns {Promise<{id: string, name: string}[] | null>}
+ */
+async function fetchClineFreeTierModels() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(CLINE_RECOMMENDED_MODELS_ENDPOINT, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return null;
+
+    const json = await response.json();
+    const free = Array.isArray(json?.free) ? json.free : [];
+    if (!free.length) return null;
+
+    return free
+      .filter((m) => typeof m?.id === "string" && m.id.trim() !== "")
+      .map((m) => ({ id: m.id, name: m.name || m.id }));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetch Cline live model catalog from Cline's /models endpoint.
+ * Unlike resolveClinepassModels, this returns ALL models (including
+ * free-tier models like z-ai/glm-5.3-flash) without the cline-pass/ prefix filter.
  *
  * @param {object} credentials - Connection credentials ({ accessToken, apiKey })
  * @returns {Promise<{ models: { id: string, name: string }[] } | null>}
  */
 export async function resolveClineModels(credentials) {
-  const [rawList, freeList] = await Promise.all([
-    fetchClineRawModels(credentials),
-    fetchClineRawModels(credentials, CLINE_RECOMMENDED_ENDPOINT),
-  ]);
-  if (!rawList && !freeList) return null;
+  const rawList = await fetchClineRawModels(credentials);
+  if (!rawList) return null;
 
-  const models = [];
-  const seen = new Set();
-  // The feed's `free` array is Cline's own answer to "what is free on this
-  // account" — it is taken whole, not filtered by id shape or by catalog price.
-  // z-ai/glm-5.3-flash is the case that matters: Cline serves it free, while the
-  // catalog quotes a per-token price for it.
-  // Free first, too: /models is the long list, and burying the handful of free
-  // ids at the end of 400+ paid ones is how they go unnoticed.
-  const free = (freeList || []).filter((m) => typeof m?.id === "string");
-  const freeIds = new Set(free.map((m) => m.id));
-  // Everything else the gateway routes, minus the vendors' own `:free` ids: the
-  // catalog is full of them and most only fail on the first request. The ones
-  // Cline actually serves (poolside/laguna-s-2.1:free today) are in the feed
-  // above, so they survive this.
-  const paid = (rawList || []).filter((m) => !(typeof m?.id === "string" && m.id.endsWith(":free") && !freeIds.has(m.id)));
-  const freeFirst = [...free, ...paid];
-  for (const m of freeFirst) {
-    if (typeof m?.id !== "string" || m.id.trim() === "" || seen.has(m.id)) continue;
-    seen.add(m.id);
-    models.push({ id: m.id, name: m.name || m.id });
+  const models = rawList
+    .filter((m) => typeof m?.id === "string" && m.id.trim() !== "")
+    .map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+    }));
+
+  // Free tier: /api/v1/models lists no `cline-free/*` ids, so merge the feed's
+  // free[] in. First writer wins on a shared id, keeping the catalog's entry
+  // for anything the two sources agree on.
+  const freeTier = await fetchClineFreeTierModels();
+  const byId = new Map(models.map((m) => [m.id, m]));
+  for (const m of freeTier || []) {
+    if (!byId.has(m.id)) byId.set(m.id, m);
   }
+  const merged = Array.from(byId.values());
 
-  return models.length ? { models } : null;
+  return merged.length ? { models: merged } : null;
 }

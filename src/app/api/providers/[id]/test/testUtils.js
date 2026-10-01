@@ -5,23 +5,21 @@ import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/sha
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
+import { GROK_CLI_PAGER_USER_AGENT, GROK_CLI_VERSION } from "open-sse/config/grokCli.js";
 import {
   refreshProviderCredentials,
   shouldRefreshCredentials,
-  buildRejectedClineRefreshPatch,
-  isClineProvider,
 } from "open-sse/services/oauthCredentialManager.js";
-import { isUnrecoverableRefreshError } from "open-sse/services/tokenRefresh.js";
-import { refreshClineToken } from "open-sse/services/tokenRefresh/providers.js";
 import {
   GEMINI_CONFIG,
   ANTIGRAVITY_CONFIG,
   KIRO_CONFIG,
   CLAUDE_CONFIG,
+  CLINE_CONFIG,
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
-import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
+import { buildClineHeaders } from "@/shared/utils/clineAuth";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -103,6 +101,9 @@ const OAUTH_TEST_CONFIG = {
     authPrefix: "Bearer ",
   },
   "codebuddy-cn": { tokenExists: true },
+  // codebuddy-intl uses the same JWT token structure as codebuddy-cn
+  // (access + refresh token pair, ~1-year expiry) — same test strategy (#4232).
+  "codebuddy-intl": { tokenExists: true },
   kimchi: {
     url: KIMCHI_CONFIG.validationUrl || "https://api.cast.ai/v1/llm/openai/supported-providers",
     method: "GET",
@@ -123,10 +124,10 @@ const OAUTH_TEST_CONFIG = {
     extraHeaders: {
       Accept: "application/json",
       ...(PROVIDERS["grok-cli"]?.headers || {
-        "User-Agent": "grok-pager/0.2.93 grok-shell/0.2.93 (linux; x86_64)",
+        "User-Agent": GROK_CLI_PAGER_USER_AGENT,
         "x-xai-token-auth": "xai-grok-cli",
         "x-grok-client-identifier": "grok-pager",
-        "x-grok-client-version": "0.2.93",
+        "x-grok-client-version": GROK_CLI_VERSION,
       }),
     },
     refreshable: true,
@@ -136,6 +137,15 @@ const OAUTH_TEST_CONFIG = {
     softFailMessage: {
       402: "Connected, but Grok Build credits are exhausted (spending limit). Add credits or upgrade SuperGrok.",
     },
+  },
+  // Muse Code subscription — probe /v1/models with the minted LLM|… key
+  "muse": {
+    url: "https://api.meta.ai/v1/models",
+    method: "GET",
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    extraHeaders: { "x-api-version": "1.0.0" },
+    refreshable: false,
   },
 };
 
@@ -172,7 +182,7 @@ export function classifyOAuthProbeResult(res, config, bodyText = "") {
 async function probeClineAccessToken(accessToken) {
   const res = await fetch("https://api.cline.bot/api/v1/users/me", {
     method: "GET",
-    headers: buildClineHeaders(toClineOAuthToken(accessToken), {
+    headers: buildClineHeaders(accessToken, {
       Accept: "application/json",
     }),
   });
@@ -296,7 +306,26 @@ async function refreshOAuthToken(connection) {
     }
 
     if (provider === "cline") {
-      return await refreshClineToken(refreshToken, console);
+      const response = await fetch(CLINE_CONFIG.refreshUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          refreshToken,
+          grantType: "refresh_token",
+          clientType: "extension",
+        }),
+      });
+      if (!response.ok) return null;
+      const payload = await response.json();
+      const data = payload?.data || payload;
+      const expiresIn = data?.expiresAt
+        ? Math.max(1, Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000))
+        : 3600;
+      return {
+        accessToken: data?.accessToken,
+        expiresIn,
+        refreshToken: data?.refreshToken || refreshToken,
+      };
     }
 
     return null;
@@ -311,27 +340,6 @@ function isTokenExpired(connection) {
 }
 
 async function testOAuthConnection(connection, effectiveProxy = null) {
-  // A successful refresh has already rotated the token upstream, so the new tokens are
-  // kept even when the probe that follows fails. Dropping them leaves the consumed
-  // refresh token in the DB and the account needs a new sign-in on the next refresh.
-  let rotatedTokens = null;
-  let signInRequired = false;
-  const refresh = async () => {
-    const tokens = await refreshOAuthToken(connection);
-    if (isUnrecoverableRefreshError(tokens)) {
-      signInRequired = true;
-      return null;
-    }
-    if (tokens?.accessToken) rotatedTokens = tokens;
-    return tokens;
-  };
-
-  const result = await probeOAuthConnection(connection, effectiveProxy, refresh);
-  if (rotatedTokens) return { ...result, refreshed: true, newTokens: rotatedTokens };
-  return signInRequired ? { ...result, signInRequired } : result;
-}
-
-async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
@@ -347,7 +355,7 @@ async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
 
   const tokenExpired = isTokenExpired(connection);
   if (config.refreshable && tokenExpired && connection.refreshToken) {
-    const tokens = await refreshTokens();
+    const tokens = await refreshOAuthToken(connection);
     if (tokens) {
       accessToken = tokens.accessToken;
       refreshed = true;
@@ -368,7 +376,7 @@ async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
     if (initial.valid) return { valid: true, error: null, refreshed, newTokens };
 
     if (initial.status === 401 && config.refreshable && !refreshed && connection.refreshToken) {
-      const tokens = await refreshTokens();
+      const tokens = await refreshOAuthToken(connection);
       if (tokens?.accessToken) {
         const retry = await probeCloudCodeAssistAccess(connection, tokens.accessToken, effectiveProxy);
         if (retry.valid) return { valid: true, error: null, refreshed: true, newTokens: tokens };
@@ -394,7 +402,7 @@ async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
       return initial;
     }
 
-    const tokens = await refreshTokens();
+    const tokens = await refreshOAuthToken(connection);
     if (!tokens?.accessToken) {
       return { valid: false, error: "Token invalid or revoked", refreshed: false };
     }
@@ -428,7 +436,7 @@ async function probeOAuthConnection(connection, effectiveProxy, refreshTokens) {
     }
 
     if (res.status === 401 && config.refreshable && !refreshed && connection.refreshToken) {
-      const tokens = await refreshTokens();
+      const tokens = await refreshOAuthToken(connection);
       if (tokens) {
         const retryUrl = config.buildUrl ? config.buildUrl(tokens.accessToken) : testUrl;
         const retryHeaders = config.noAuth
@@ -705,7 +713,8 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       case "dahl":
       case "atria":
       case "agnes":
-      case "bai": {
+      case "bai":
+      case "muse": {
         const cfg = PROVIDERS[connection.provider];
         const res = await fetchWithConnectionProxy(cfg.validateUrl, { headers: { Authorization: `Bearer ${connection.apiKey}` } }, effectiveProxy);
         return { valid: res.ok, error: res.ok ? null : "Invalid API key" };
@@ -920,10 +929,6 @@ export async function testSingleConnection(id) {
         ...result.newTokens.providerSpecificData,
       };
     }
-  }
-
-  if (!result.valid && result.signInRequired && isClineProvider(connection.provider)) {
-    Object.assign(updateData, buildRejectedClineRefreshPatch());
   }
 
   await updateProviderConnection(id, updateData);
