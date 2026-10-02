@@ -25,7 +25,11 @@ import { useNotificationStore } from "@/store/notificationStore";
 import { useHeaderSearchStore } from "@/store/headerSearchStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import AddCompatibleModal from "./components/AddCompatibleModal";
-import { STATUS_FILTER_OPTIONS, matchesStatusFilter } from "./utils";
+import {
+  STATUS_FILTER_OPTIONS,
+  matchesProviderSearch,
+  matchesStatusFilter,
+} from "./utils";
 
 function getStatusDisplay(connected, error, errorCode) {
   const parts = [];
@@ -99,6 +103,8 @@ const APIKEY_INITIAL_VISIBLE = 20;
 export default function ProvidersPage() {
   const [connections, setConnections] = useState([]);
   const [providerNodes, setProviderNodes] = useState([]);
+  const [customModels, setCustomModels] = useState([]);
+  const [modelAliases, setModelAliases] = useState({});
   const [loading, setLoading] = useState(true);
   const [showAllApikey, setShowAllApikey] = useState(false);
   const [showAddCompatibleModal, setShowAddCompatibleModal] = useState(false);
@@ -113,15 +119,15 @@ export default function ProvidersPage() {
   const unregisterSearch = useHeaderSearchStore((s) => s.unregister);
 
   useEffect(() => {
-    registerSearch("Search providers...");
+    registerSearch("Search providers or models...");
     return () => unregisterSearch();
   }, [registerSearch, unregisterSearch]);
 
-  const matchSearch = (name) => {
-    if (!searchQuery.trim()) return true;
-    if (!name) return false;
-    return name.toLowerCase().includes(searchQuery.trim().toLowerCase());
-  };
+  const matchSearch = (providerId, provider) =>
+    matchesProviderSearch(searchQuery, providerId, provider, {
+      customModels,
+      modelAliases,
+    });
 
   const sortByPriority = (entries, authType) =>
     [...entries].sort(([ka, a], [kb, b]) => {
@@ -168,6 +174,29 @@ export default function ProvidersPage() {
       }
     };
     fetchData();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchSearchData = async () => {
+      const [customResult, aliasesResult] = await Promise.allSettled([
+        fetch("/api/models/custom", { cache: "no-store" }).then((res) =>
+          res.ok ? res.json() : null,
+        ),
+        fetch("/api/models/alias", { cache: "no-store" }).then((res) =>
+          res.ok ? res.json() : null,
+        ),
+      ]);
+      if (cancelled) return;
+      if (customResult.status === "fulfilled")
+        setCustomModels(customResult.value?.models || []);
+      if (aliasesResult.status === "fulfilled")
+        setModelAliases(aliasesResult.value?.aliases || {});
+    };
+    fetchSearchData();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const getProviderStats = (providerId, authType) => {
@@ -271,9 +300,10 @@ export default function ProvidersPage() {
       color: "#10A37F",
       textIcon: "OC",
       apiType: node.apiType,
+      prefix: node.prefix,
     }))
     .filter(
-      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+      (p) => matchSearch(p.id, p) && matchStatus(getProviderStats(p.id, "apikey")),
     );
 
   const anthropicCompatibleProviders = providerNodes
@@ -283,9 +313,10 @@ export default function ProvidersPage() {
       name: node.name || "Anthropic Compatible",
       color: "#D97757",
       textIcon: "AC",
+      prefix: node.prefix,
     }))
     .filter(
-      (p) => matchSearch(p.name) && matchStatus(getProviderStats(p.id, "apikey")),
+      (p) => matchSearch(p.id, p) && matchStatus(getProviderStats(p.id, "apikey")),
     );
 
   // Dual-auth providers (oauth + apikey) store API keys as authType "apikey"
@@ -310,7 +341,7 @@ export default function ProvidersPage() {
     Object.entries(OAUTH_PROVIDERS).filter(
       ([key, info]) =>
         !info.hidden &&
-        matchSearch(info.name) &&
+        matchSearch(key, info) &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
     ),
     "oauth",
@@ -319,7 +350,7 @@ export default function ProvidersPage() {
     .filter(
       ([key, info]) =>
         !info.hidden &&
-        matchSearch(info.name) &&
+        matchSearch(key, info) &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
     )
     .sort(([, a], [, b]) => (b.noAuth ? 1 : 0) - (a.noAuth ? 1 : 0));
@@ -330,7 +361,7 @@ export default function ProvidersPage() {
     .filter(
       ([key, info]) =>
         !info.hidden &&
-        matchSearch(info.name) &&
+        matchSearch(key, info) &&
         (info.serviceKinds ?? ["llm"]).includes("llm") &&
         matchStatus(getProviderStats(key, dualAuthTypes(info, key)), info.noAuth),
     )
@@ -351,7 +382,7 @@ export default function ProvidersPage() {
       ([key, info]) =>
         !info.hidden &&
         (info.serviceKinds ?? ["llm"]).includes("llm") &&
-        matchSearch(info.name) &&
+        matchSearch(key, info) &&
         matchStatus(getProviderStats(key, "apikey"), info.noAuth),
     )
     .sort(([ka, a], [kb, b]) => {
