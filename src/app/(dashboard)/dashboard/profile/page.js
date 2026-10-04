@@ -1536,7 +1536,7 @@ export default function ProfilePage() {
               <div className="flex-1 min-w-0">
                 <p className="font-medium text-sm sm:text-base">Auto Combo</p>
                 <p className="text-xs sm:text-sm text-text-muted">
-                  Send a bare model name (no provider prefix) and it falls back across every provider that has it
+                  Send a model name without a provider prefix to try matching routes across all connected providers. Working routes go first; failed routes remain as fallbacks.
                 </p>
               </div>
               <Toggle
@@ -1552,7 +1552,7 @@ export default function ProfilePage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm sm:text-base">Loose Model Matching</p>
                   <p className="text-xs sm:text-sm text-text-muted">
-                    Treat provider spellings as the same model (gpt-5.6-sol = gpt-5-6-sol = gpt-5.6-sol-latest)
+                    Include alternate model spellings and variants. Claude Opus names also match other available Opus versions.
                   </p>
                 </div>
                 <Toggle

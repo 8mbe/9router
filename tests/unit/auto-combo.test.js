@@ -4,6 +4,7 @@ import {
   modelTokens,
   scoreModelMatch,
   bestModelMatch,
+  allModelMatches,
   MATCH_TIER,
 } from "open-sse/services/modelMatch.js";
 import {
@@ -102,6 +103,20 @@ describe("modelMatch — tiers", () => {
   it("ignores empty and non-string candidates", () => {
     expect(bestModelMatch("gpt-5.6-sol", [null, undefined, "", "   ", 42])).toBeNull();
   });
+
+  it("matches the full Opus family only when the caller enables family matching", () => {
+    const catalog = ["claude-opus-5", "claude-opus-4.7-thinking", "claude-3-opus-20240229", "claude-sonnet-5", "claude-haiku-5"];
+    expect(allModelMatches("claude-opus-5", catalog, { allowFamilyMatches: true, maxTier: MATCH_TIER.FAMILY }).map(({ candidate }) => candidate)).toEqual(catalog.slice(0, 3));
+    expect(scoreModelMatch("claude-opus-5", "claude-3-opus-20240229")).toBeNull();
+  });
+
+  it("keeps generic fuzzy matches within the requested version and known variants", () => {
+    for (const candidate of ["gpt-4", "gpt-4.1", "gpt-4.5", "gpt-4ox"]) {
+      expect(scoreModelMatch("gpt-4o", candidate)).toBeNull();
+    }
+    expect(scoreModelMatch("gpt-5.6-sol", "gpt-5-6-solm")).toMatchObject({ tier: MATCH_TIER.VARIANT });
+    expect(scoreModelMatch("gpt-5.6-sol", "gpt-5.7-sol")).toBeNull();
+  });
 });
 
 describe("autoComboHealth", () => {
@@ -153,19 +168,19 @@ describe("autoComboHealth", () => {
     expect(isAutoComboDisabled("prov-a/gpt-5.6-sol")).toBe(true);
   });
 
-  it("partitions members, ordering benched ones by soonest eligible", () => {
+  it("partitions members without changing failed member order", () => {
     markAutoComboUnavailable("prov-b/m", 429, "x", Date.now() + 60 * 60 * 1000);
     markAutoComboUnavailable("prov-c/m", 429, "x", Date.now() + 10 * 60 * 1000);
 
     const { healthy, disabled } = partitionByHealth(["prov-a/m", "prov-b/m", "prov-c/m"]);
     expect(healthy).toEqual(["prov-a/m"]);
-    expect(disabled).toEqual(["prov-c/m", "prov-b/m"]);
+    expect(disabled).toEqual(["prov-b/m", "prov-c/m"]);
   });
 
   it("reports why a member was benched", () => {
     markAutoComboUnavailable("prov-a/m", 402, "payment required");
     const [entry] = getAutoComboHealth();
-    expect(entry).toMatchObject({ member: "prov-a/m", failures: 1, disabled: true, lastStatus: 402 });
+    expect(entry).toMatchObject({ member: "prov-a/m", status: "not_working", failures: 1, disabled: true, lastStatus: 402 });
     expect(entry.lastError).toContain("payment required");
   });
 
@@ -175,5 +190,23 @@ describe("autoComboHealth", () => {
     resetAutoComboHealth("prov-a/m");
     expect(isAutoComboDisabled("prov-a/m")).toBe(false);
     expect(isAutoComboDisabled("prov-b/m")).toBe(true);
+  });
+
+  it("remembers successful outcomes and ranks them ahead of untested members", () => {
+    markAutoComboHealthy("prov-c/m");
+    markAutoComboUnavailable("prov-b/m", 503);
+    expect(partitionByHealth(["prov-a/m", "prov-b/m", "prov-c/m"]).healthy).toEqual(["prov-c/m", "prov-a/m"]);
+    expect(getAutoComboHealth().find(({ member }) => member === "prov-c/m")).toMatchObject({ status: "working", failures: 0, disabled: false });
+  });
+
+  it("prunes stale health on reads without needing another failure", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-20T00:00:00Z"));
+    markAutoComboHealthy("prov-a/m");
+    markAutoComboUnavailable("prov-b/m", 503);
+    vi.setSystemTime(new Date("2026-09-21T00:00:01Z"));
+    expect(getAutoComboHealth()).toEqual([]);
+    expect(partitionByHealth(["prov-a/m", "prov-b/m"]).untested).toEqual(["prov-a/m", "prov-b/m"]);
+    vi.useRealTimers();
   });
 });

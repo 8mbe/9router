@@ -1,4 +1,11 @@
-import { ERROR_RULES, BACKOFF_CONFIG, TRANSIENT_COOLDOWN_MS } from "../config/errorConfig.js";
+import { ERROR_RULES, BACKOFF_CONFIG, TRANSIENT_COOLDOWN_MS, MODEL_UNAVAILABLE_ERROR_PATTERNS, COOLDOWN_MS } from "../config/errorConfig.js";
+
+/** A gateway may report an unavailable model as 400 instead of 404. */
+export function isModelUnavailableError(status, errorText) {
+  if (Number(status) !== 400 || !errorText) return false;
+  const message = typeof errorText === "string" ? errorText : JSON.stringify(errorText);
+  return MODEL_UNAVAILABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 /**
  * Calculate exponential backoff cooldown for rate limits (429)
@@ -44,6 +51,10 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
       }
       return { shouldFallback: true, cooldownMs: rule.cooldownMs };
     }
+  }
+
+  if (isModelUnavailableError(status, errorText)) {
+    return { shouldFallback: true, cooldownMs: COOLDOWN_MS.notFound };
   }
 
   // Request-scoped client errors that matched no rule above: a 400 caused by the

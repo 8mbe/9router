@@ -28,6 +28,7 @@ import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { resolveAutoCombo } from "../services/autoCombo.js";
 import { markAutoComboHealthy, markAutoComboUnavailable } from "open-sse/services/autoComboHealth.js";
 import { checkFallbackError } from "open-sse/services/accountFallback.js";
+import { AUTO_COMBO_STREAM_ERROR_TYPES, AUTO_COMBO_STREAM_FRAME_LIMIT } from "open-sse/config/autoComboConstants.js";
 
 /**
  * Handle chat completion request
@@ -144,12 +145,10 @@ export async function handleChat(request, clientRawRequest = null) {
 
   // Bare model name with no provider prefix and no explicit combo/alias: route
   // it across every connected provider that carries the model (auto-combo).
-  // Members that fail get benched for later requests — see services/autoCombo.js.
+  // Known working members go first; failed members remain as later fallbacks.
   const autoCombo = await resolveAutoCombo(modelStr, settings);
   if (autoCombo && autoCombo.models.length > 0) {
-    const trackedSingleModel = withAutoComboHealth(
-      (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, contextMarker)
-    );
+    const trackedSingleModel = (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, contextMarker);
     // Capacity adapters apply here exactly as they do to a hand-built combo: a
     // single-provider auto-combo must still be able to borrow a vision model.
     const autoAugmented = augmentModelsWithCapacityAdapter(autoCombo.models, requiredCapabilities, settings);
@@ -164,9 +163,9 @@ export async function handleChat(request, clientRawRequest = null) {
     // strategy, the same as the solo path below.
     const autoStrategy = autoCombo.models.length === 1
       ? getActiveAdapterStrategy(requiredCapabilities, settings)
-      : (settings.autoComboStrategy || "fallback");
-    const benchedNote = autoCombo.benched.length ? `, benched: ${autoCombo.benched.join(", ")}` : "";
-    log.info("AUTOCOMBO", `"${modelStr}" → ${autoAugmented.length} providers: ${autoAugmented.join(", ")}${benchedNote}`);
+      : "fallback";
+    const failedNote = autoCombo.benched.length ? `, previous failures: ${autoCombo.benched.join(", ")}` : "";
+    log.info("AUTOCOMBO", `"${modelStr}" → ${autoAugmented.length} members: ${autoAugmented.join(", ")}${failedNote}`);
 
     return handleComboChat({
       body,
@@ -260,7 +259,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   }
 
   const { provider, model } = modelInfo;
+  const member = modelStr.includes("/") ? modelStr : `${provider}/${model}`;
+  return withAutoComboHealth(() => handleProviderModelChat(
+    body, modelInfo, clientRawRequest, request, apiKey, contextMarker
+  ))(body, member);
+}
 
+async function handleProviderModelChat(body, { provider, model }, clientRawRequest, request, apiKey, contextMarker) {
   // Routing shown in the unified "▶" line (client model → provider/model)
 
   // Extract userAgent from request
@@ -387,30 +392,126 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 }
 
 /**
- * Wrap a single-model handler so auto-combo learns which members work.
- *
- * Only failures worth falling back from bench a member: a 400 from a malformed
- * request says nothing about the provider, and benching it would take a healthy
- * provider out of rotation over the client's own mistake. Status alone is
- * enough to decide — the body is left untouched so the caller still owns the
- * (possibly streaming) response.
+ * Track concrete provider/model outcomes for combo ordering and the dashboard.
+ * Streaming successes are recorded when the body finishes without an error.
  */
 function withAutoComboHealth(handleSingleModel) {
   return async (body, modelStr) => {
-    const response = await handleSingleModel(body, modelStr);
+    let response;
+    try {
+      response = await handleSingleModel(body, modelStr);
+    } catch (error) {
+      recordAutoComboFailure(modelStr, HTTP_STATUS.BAD_GATEWAY, error?.message || String(error));
+      throw error;
+    }
     try {
       if (response?.ok) {
+        if (response.body && response.headers.get("content-type")?.includes("text/event-stream")) {
+          return observeAutoComboStream(response, modelStr);
+        }
+        if (response.headers.get("content-type")?.includes("application/json")) {
+          const payload = await response.clone().json().catch(() => null);
+          if (payload?.error) {
+            const error = payload.error;
+            const code = Number(error?.status || error?.code);
+            const status = code >= 400 && code <= 599 ? code : HTTP_STATUS.BAD_GATEWAY;
+            recordAutoComboFailure(modelStr, status, typeof error === "string" ? error : error?.message || JSON.stringify(error));
+            return new Response(response.body, { status, headers: response.headers });
+          }
+        }
         markAutoComboHealthy(modelStr);
       } else if (response?.status) {
-        const { shouldFallback } = checkFallbackError(response.status, "");
-        if (shouldFallback) {
-          const until = markAutoComboUnavailable(modelStr, response.status, response.statusText || null);
-          log.warn("AUTOCOMBO", `${modelStr} benched until ${new Date(until).toISOString()} (${response.status})`);
-        }
+        const errorText = await response.clone().text().catch(() => response.statusText || "");
+        recordAutoComboFailure(modelStr, response.status, errorText);
       }
     } catch {
       // Health bookkeeping must never break the response path.
     }
     return response;
   };
+}
+
+function recordAutoComboFailure(member, status, errorText) {
+  const { shouldFallback } = checkFallbackError(status, errorText);
+  if (!shouldFallback) return;
+  const until = markAutoComboUnavailable(member, status, errorText || null);
+  log.warn("AUTOCOMBO", `${member} failed, cooldown until ${new Date(until).toISOString()} (${status})`);
+}
+
+function observeAutoComboStream(response, member) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let failed = false;
+  let receivedData = false;
+  let canceled = false;
+  let discardingFrame = false;
+  let observationComplete = true;
+
+  function inspectFrame(frame) {
+    const lines = frame.split(/\r?\n/);
+    const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+    const data = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+    if (!data || data === "[DONE]") return;
+    let payload;
+    try { payload = JSON.parse(data); } catch { return; }
+    receivedData = true;
+    const error = payload?.error || payload?.response?.error;
+    if (!error && !AUTO_COMBO_STREAM_ERROR_TYPES.has(event) && !AUTO_COMBO_STREAM_ERROR_TYPES.has(payload?.type)) return;
+    if (failed) return;
+    failed = true;
+    const status = Number(error?.status || error?.code || payload?.status);
+    recordAutoComboFailure(member, status >= 400 && status <= 599 ? status : HTTP_STATUS.BAD_GATEWAY,
+      typeof error === "string" ? error : error?.message || JSON.stringify(payload));
+  }
+
+  const stream = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (canceled) return;
+        if (done) {
+          pending += decoder.decode();
+          if (pending.trim()) inspectFrame(pending);
+          if (!failed && receivedData && observationComplete) markAutoComboHealthy(member);
+          reader.releaseLock();
+          controller.close();
+          return;
+        }
+        let decoded = decoder.decode(value, { stream: true });
+        if (discardingFrame) {
+          const boundary = decoded.match(/\r?\n\r?\n/);
+          if (!boundary) {
+            controller.enqueue(value);
+            return;
+          }
+          decoded = decoded.slice(boundary.index + boundary[0].length);
+          discardingFrame = false;
+        }
+        pending += decoded;
+        const frames = pending.split(/\r?\n\r?\n/);
+        pending = frames.pop() || "";
+        for (const frame of frames) {
+          if (frame.length <= AUTO_COMBO_STREAM_FRAME_LIMIT) inspectFrame(frame);
+          else observationComplete = false;
+        }
+        if (pending.length > AUTO_COMBO_STREAM_FRAME_LIMIT) {
+          pending = "";
+          discardingFrame = true;
+          observationComplete = false;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        if (canceled) return;
+        if (!failed) recordAutoComboFailure(member, HTTP_STATUS.BAD_GATEWAY, error?.message || String(error));
+        reader.releaseLock();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      canceled = true;
+      return reader.cancel(reason).finally(() => reader.releaseLock());
+    },
+  }, { highWaterMark: 0 });
+  return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

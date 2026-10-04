@@ -47,6 +47,12 @@ const COOLDOWN = {
   short: 5 * 1000,
 };
 
+// Match the model's availability, rather than unsupported request parameters.
+export const MODEL_UNAVAILABLE_ERROR_PATTERNS = [
+  /\b(?:unknown|unrecognized|unsupported|unavailable|invalid)\s+model(?:\s+(?:id|name))?\b(?!\s+(?:parameter|argument|request|response|configuration|context|format|input|output)\b)/i,
+  /\bmodel\b(?:(?:\s+(?:id|name))?\s*[:=]?\s*["'`]?[-\w./:]+["'`]?)?\s+(?:(?:is|was|currently|is\s+currently)\s+)?(?:not\s+(?:found|supported|available|enabled|accessible)|unavailable|unsupported|does\s+not\s+exist|doesn't\s+exist)\b/i,
+];
+
 /**
  * Unified error classification rules.
  * Checked top-to-bottom: text rules first (by order), then status rules.

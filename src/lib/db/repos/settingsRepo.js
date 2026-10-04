@@ -25,7 +25,8 @@ const DEFAULT_SETTINGS = {
   // false restricts membership to exact/canonical matches only.
   autoComboFuzzy: true,
   autoComboStrategy: "fallback",
-  autoComboMaxMembers: 8,
+  // Kept for old clients. Automatic combos include every matching member.
+  autoComboMaxMembers: 0,
   // Provider ids to try first within an auto-combo, best first.
   autoComboPriority: [],
   capacityAdapter: {

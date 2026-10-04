@@ -1,5 +1,6 @@
 import { getModelProbes, setModelProbe, getModelProbesVersion } from "@/lib/db/repos/modelProbesRepo.js";
 import { resolveProbeAlias } from "./alias";
+import { isModelUnavailableError } from "open-sse/services/accountFallback.js";
 
 // A failed verdict stops demoting a key after this long. Provider-side state changes
 // — a plan upgrade, a restored quota, a model rolled out to an account — must not be
@@ -95,14 +96,13 @@ export function orderConnectionsByProbe(connections, model, hints, staleAfterMs 
 // 429/5xx/timeouts are transient and already handled by modelLock cooldowns; recording
 // them here would teach routing to avoid a key that is merely busy.
 const DURABLE_STATUSES = new Set([401, 403, 404]);
-const DURABLE_400_HINT = /(model).*(not found|not exist|unsupported|no access|invalid|not available|unavailable)|(?:not found|unsupported|invalid).*(model)/i;
+const MODEL_ACCESS_DENIED_HINT = /\bmodel\b.*\bno access\b/i;
 
 export function isDurableModelFailure(status, errorText) {
   if (DURABLE_STATUSES.has(Number(status))) return true;
-  // Plenty of gateways answer 400 for "no such model", but 400 is also what a genuinely
-  // malformed user request returns — so it only counts with a model-shaped message.
-  if (Number(status) === 400 && typeof errorText === "string") return DURABLE_400_HINT.test(errorText);
-  return false;
+  if (isModelUnavailableError(status, errorText)) return true;
+  // Preserve explicit access denials without treating malformed requests as model failures.
+  return Number(status) === 400 && typeof errorText === "string" && MODEL_ACCESS_DENIED_HINT.test(errorText);
 }
 
 /**

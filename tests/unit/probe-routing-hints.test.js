@@ -111,4 +111,18 @@ describe("isDurableModelFailure", () => {
     expect(isDurableModelFailure(400, "")).toBe(false);
     expect(isDurableModelFailure(400, null)).toBe(false);
   });
+
+  it("uses the same availability wording as combo fallback", () => {
+    expect(isDurableModelFailure(400, "Unknown model name: claude-opus-5")).toBe(true);
+    expect(isDurableModelFailure(400, "Model claude-opus-5 is not supported")).toBe(true);
+    expect(isDurableModelFailure(400, "Requested model is unavailable")).toBe(true);
+    expect(isDurableModelFailure(400, "model claude-opus-5: no access for this account")).toBe(true);
+  });
+
+  it("does not persist request parameter and context errors as broken models", () => {
+    expect(isDurableModelFailure(400, "Unsupported model parameter: temperature")).toBe(false);
+    expect(isDurableModelFailure(400, "Invalid model response format")).toBe(false);
+    expect(isDurableModelFailure(400, "The model's maximum context length is exceeded")).toBe(false);
+    expect(isDurableModelFailure(400, "The model does not support image input")).toBe(false);
+  });
 });

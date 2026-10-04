@@ -9,6 +9,7 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { ComboStatusSection, ComboMemberStatus, MemberStatus, providerLabel, useComboStatus } from "./combo-status";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -47,9 +48,9 @@ function normalizeCapEntry(entry) {
 }
 
 const STRATEGY_OPTIONS = [
-  { value: "fallback", label: "Fallback — try in order" },
-  { value: "round-robin", label: "Round Robin — rotate" },
-  { value: "fusion", label: "Fusion — panel + judge" },
+  { value: "fallback", label: "Fallback: try in order" },
+  { value: "round-robin", label: "Round Robin: rotate" },
+  { value: "fusion", label: "Fusion: panel + judge" },
 ];
 
 export default function CombosPage() {
@@ -66,6 +67,7 @@ export default function CombosPage() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const { copied, copy } = useCopyToClipboard();
+  const routingStatus = useComboStatus();
 
   useEffect(() => {
     fetchData();
@@ -369,9 +371,9 @@ export default function CombosPage() {
             Group models under one name, then pick a strategy per combo:
           </p>
           <ul className="text-sm text-text-muted mt-2 flex flex-col gap-1">
-            <li><span className="font-medium text-text-main">Fallback</span> — tries models in order (next on failure)</li>
-            <li><span className="font-medium text-text-main">Round Robin</span> — rotates models across requests to spread load</li>
-            <li><span className="font-medium text-text-main">Fusion</span> — queries all models in parallel, then a judge synthesizes one answer. Best quality, but costs the most: every request bills all panel models + the judge (N+1 calls)</li>
+            <li><span className="font-medium text-text-main">Fallback</span> tries models in order, then moves to the next on failure.</li>
+            <li><span className="font-medium text-text-main">Round Robin</span> rotates models across requests to spread load.</li>
+            <li><span className="font-medium text-text-main">Fusion</span> queries all models in parallel, then a judge combines their answers. Each request bills all panel models and the judge.</li>
           </ul>
           <p className="hidden text-xs text-text-muted mt-3 max-w-2xl">
             <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit 9router without the prefix.
@@ -408,6 +410,8 @@ export default function CombosPage() {
           </div>
         </div>
       </div>
+
+      <ComboStatusSection key={routingStatus.model} status={routingStatus} />
 
       {/* Combos List */}
       {combos.length === 0 ? (
@@ -502,6 +506,7 @@ export default function CombosPage() {
                   onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
                   selected={selectedIds.includes(combo.id)}
                   onToggleSelect={() => toggleSelect(combo.id)}
+                  routingStatus={routingStatus}
                 />
               ));
             })()}
@@ -515,6 +520,7 @@ export default function CombosPage() {
         onChange={handleSetCapacityAdapter}
         activeProviders={activeProviders}
         getCaps={getCaps}
+        routingStatus={routingStatus}
       />
 
       {/* Create Modal - Use key to force remount and reset state */}
@@ -563,7 +569,7 @@ const fmtK = (n) => {
   return `${Math.round(n / 1000)}k`;
 };
 
-function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
+function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect, routingStatus }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
@@ -628,7 +634,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                   title="Pick the model that fuses panel answers"
                 >
                   <span className="material-symbols-outlined text-[13px]">gavel</span>
-                  <span className="truncate">{judge || `Auto — ${combo.models[0] || "first model"}`}</span>
+                  <span className="truncate">{judge || `Auto: ${combo.models[0] || "first model"}`}</span>
                 </button>
                 {judge && (
                   <button
@@ -687,6 +693,8 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
         </div>
       </div>
 
+      <ComboMemberStatus combo={combo} comboByName={comboByName} status={routingStatus} />
+
       {/* Judge model picker (single-select; combo members make natural judges too) */}
       {showJudgeSelect && (
         <ModelSelectModal
@@ -703,7 +711,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
   );
 }
 
-function CapacityAdapterSection({ capacityAdapter, onChange, activeProviders, getCaps }) {
+function CapacityAdapterSection({ capacityAdapter, onChange, activeProviders, getCaps, routingStatus }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -723,6 +731,7 @@ function CapacityAdapterSection({ capacityAdapter, onChange, activeProviders, ge
             onChange={(entry) => onChange({ ...capacityAdapter, [cap.key]: entry })}
             activeProviders={activeProviders}
             getCaps={getCaps}
+            routingStatus={routingStatus}
           />
         ))}
       </div>
@@ -730,7 +739,7 @@ function CapacityAdapterSection({ capacityAdapter, onChange, activeProviders, ge
   );
 }
 
-function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) {
+function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps, routingStatus }) {
   const [showModelSelect, setShowModelSelect] = useState(false);
   const { enabled, roundRobin, models } = entry;
 
@@ -762,7 +771,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
   };
 
   return (
-    <Card padding="sm" className={`group ${!enabled ? "opacity-50" : ""}`}>
+    <Card padding="sm" className="group">
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {/* Master toggle + icon + label */}
         <div className="flex min-w-0 flex-1 items-start gap-2.5 sm:items-center">
@@ -777,7 +786,8 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               <code className="font-mono text-sm font-medium">{cap.label}</code>
-              <span className="text-[10px] text-text-muted">— {cap.desc}</span>
+              <span className="text-[10px] text-text-muted">{cap.desc}</span>
+              {!enabled && <span className="text-xs text-text-muted">Disabled</span>}
             </div>
           </div>
         </div>
@@ -813,33 +823,41 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
         </div>
       ) : (
         <div className="mt-3 overflow-hidden rounded-lg border border-border/50">
-          <table className="w-full text-left text-xs">
+          <table className="w-full table-fixed text-left text-xs">
             <thead>
               <tr className="border-b border-border/40 bg-black/[0.02] text-text-muted dark:bg-white/[0.02]">
-                <th className="w-12 px-3 py-1.5 font-medium text-center">#</th>
-                <th className="px-3 py-1.5 font-medium">Model</th>
-                <th className="w-24 px-3 py-1.5 font-medium text-center">Order</th>
-                <th className="w-12 px-3 py-1.5 font-medium text-right"></th>
+                <th className="w-8 px-1 py-1.5 font-medium text-center sm:w-12 sm:px-3">#</th>
+                <th className="px-2 py-1.5 font-medium sm:px-3">Model / provider / status</th>
+                <th className="w-20 px-1 py-1.5 font-medium text-center sm:w-24 sm:px-3">Order</th>
+                <th className="w-10 px-1 py-1.5 font-medium text-right sm:w-12 sm:px-3"><span className="sr-only">Remove</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/30 font-mono">
               {models.map((model, index) => (
                 <tr key={`${model}-${index}`} className="hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors">
-                  <td className="px-3 py-2 text-center text-text-muted text-[11px] font-sans">
+                  <td className="px-1 py-2 text-center text-text-muted text-[11px] font-sans sm:px-3">
                     #{index + 1}
                   </td>
-                  <td className="px-3 py-2 text-text-main">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="truncate">{model}</span>
+                  <td className="px-2 py-2 text-text-main sm:px-3">
+                    <p className="mb-1 break-words font-sans text-xs font-medium">{providerLabel(model, routingStatus.healthByMember[model.toLowerCase()])}</p>
+                    <div className="flex min-w-0 items-center gap-1.5 flex-wrap">
+                      <span className="min-w-0 break-all">{model}</span>
                       <CapacityBadges caps={getCaps?.(model)} />
                       {model === DEFAULT_FALLBACK_MODEL && (
-                        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-[#166534] dark:text-[#86efac]">
                           free default
                         </span>
                       )}
                     </div>
+                    <div className="mt-1">
+                      <MemberStatus
+                        entry={routingStatus.healthByMember[model.toLowerCase()]}
+                        loading={routingStatus.loading && !routingStatus.data}
+                        unavailable={!!routingStatus.error && !routingStatus.data}
+                      />
+                    </div>
                   </td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="px-1 py-2 text-center sm:px-3">
                     <div className="inline-flex items-center gap-1">
                       <button
                         type="button"
@@ -869,7 +887,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
                       </button>
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-1 py-2 text-right sm:px-3">
                     <button
                       type="button"
                       onClick={() => handleRemove(index)}

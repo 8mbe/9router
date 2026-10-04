@@ -21,6 +21,8 @@
  * Pure and dependency-free: no DB, no registry, no network.
  */
 
+import { AUTO_COMBO_MODEL_FAMILIES } from "../config/autoComboConstants.js";
+
 /** Match tiers, ordered from strongest to weakest. */
 export const MATCH_TIER = {
   EXACT: 0,
@@ -28,6 +30,7 @@ export const MATCH_TIER = {
   DECORATED: 2,
   VARIANT: 3,
   NEAR: 4,
+  FAMILY: 5,
 };
 
 /** Weakest tier accepted by default. Callers can tighten this. */
@@ -144,7 +147,7 @@ function affixRemainder(a, b) {
 /** A remainder that names a size/tier variant rather than a different model. */
 function isVariantAffix(remainder) {
   if (!remainder) return false;
-  if (remainder.length <= 2) return true;
+  if (SNAPSHOT_RE.test(remainder)) return true;
   const parts = remainder.match(/\d+|[a-z]+/g) || [];
   return parts.length > 0 && parts.every((p) => VARIANT_TOKENS.has(p) || SNAPSHOT_RE.test(p));
 }
@@ -156,7 +159,7 @@ function isVariantAffix(remainder) {
  * @param {string} candidate - An id from a provider's catalog.
  * @returns {{tier: number, score: number, candidate: string}|null} null when unrelated.
  */
-export function scoreModelMatch(requested, candidate) {
+export function scoreModelMatch(requested, candidate, options = {}) {
   if (!requested || !candidate) return null;
   if (requested === candidate) return { tier: MATCH_TIER.EXACT, score: 0, candidate };
 
@@ -184,10 +187,28 @@ export function scoreModelMatch(requested, candidate) {
     return { tier: MATCH_TIER.VARIANT, score: 30 + remainder.length, candidate };
   }
 
-  const max = nearThreshold(reqCanon);
-  const distance = editDistance(reqCanon, candCanon, max);
-  if (distance <= max) {
-    return { tier: MATCH_TIER.NEAR, score: 40 + distance, candidate };
+  const reqVersion = modelTokens(requested).filter((token) => /^\d+$/.test(token)).join("");
+  const candVersion = modelTokens(candidate).filter((token) => /^\d+$/.test(token)).join("");
+  if (remainder === null && reqVersion === candVersion) {
+    const max = nearThreshold(reqCanon);
+    const distance = editDistance(reqCanon, candCanon, max);
+    if (distance <= max) {
+      return { tier: MATCH_TIER.NEAR, score: 40 + distance, candidate };
+    }
+  }
+
+  if (options.allowFamilyMatches) {
+    const reqTokens = modelTokens(requested);
+    const candTokens = modelTokens(candidate);
+    const family = AUTO_COMBO_MODEL_FAMILIES.find(({ tokens, excludedTokens }) =>
+      tokens.every((token) => reqTokens.includes(token))
+      && !excludedTokens.some((token) => reqTokens.includes(token))
+    );
+    if (family
+      && family.tokens.every((token) => candTokens.includes(token))
+      && !family.excludedTokens.some((token) => candTokens.includes(token))) {
+      return { tier: MATCH_TIER.FAMILY, score: 50, candidate };
+    }
   }
 
   return null;
@@ -218,4 +239,14 @@ export function bestModelMatch(requested, candidates, options = {}) {
     }
   }
   return best;
+}
+
+/** All matching catalog ids, retaining catalog order when scores tie. */
+export function allModelMatches(requested, candidates, options = {}) {
+  const maxTier = options.maxTier ?? DEFAULT_MAX_TIER;
+  return (candidates || [])
+    .filter((candidate) => typeof candidate === "string" && candidate.trim())
+    .map((candidate) => scoreModelMatch(requested, candidate, options))
+    .filter((match) => match && match.tier <= maxTier)
+    .sort((a, b) => a.score - b.score);
 }
