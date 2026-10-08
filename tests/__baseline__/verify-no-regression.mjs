@@ -12,9 +12,19 @@ const resultsPath = process.argv[2];
 if (!resultsPath) { console.error("Missing results.json path"); process.exit(2); }
 
 const r = JSON.parse(readFileSync(resultsPath, "utf8"));
+// Vitest reports `name` as a suite-relative path (e.g. "unit/foo.test.js") and
+// some setups bake an absolute path. Normalize to the "tests/<dir>/<file>"
+// shape used in known-fails.txt regardless of where the suite runs from.
+const TEST_PATH = /(?:^|\/)(unit|translator|integration|real|e2e|auth)\/[^/]*\.test\.js/;
+const toKnownKey = (name, fullName) => {
+  const m = name.match(TEST_PATH);
+  const rel = m ? `tests/${m[0].replace(/^\/+/, "")}` : name;
+  return `${rel} :: ${fullName}`;
+};
+
 const nowFails = r.testResults.flatMap(f =>
   f.assertionResults.filter(a => a.status === "failed")
-    .map(a => f.name.split("/app/")[1] + " :: " + a.fullName)
+    .map(a => toKnownKey(f.name, a.fullName))
 );
 
 // Regression = fail bây giờ NHƯNG không có trong baseline known-fails
