@@ -1,4 +1,4 @@
-import { buildClineHeaders } from "../shared/clineAuth.js";
+import { buildClineHeaders, toClineOAuthToken } from "../shared/clineAuth.js";
 
 const CLINEPASS_MODELS_ENDPOINT = "https://api.cline.bot/api/v1/models";
 // Cline's free tier is published here, not in /api/v1/models: the catalog
@@ -21,7 +21,7 @@ function buildModelListHeaders(token, isApiKey) {
       Authorization: `Bearer ${token}`,
     };
   }
-  return buildClineHeaders(token, { Accept: "application/json" });
+  return buildClineHeaders(toClineOAuthToken(token), { Accept: "application/json" });
 }
 
 /**

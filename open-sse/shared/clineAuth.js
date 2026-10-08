@@ -16,6 +16,16 @@ export function getClineAccessToken(token) {
   return isWorkOsJwt ? `workos:${trimmed}` : trimmed;
 }
 
+// Cline OAuth access tokens always use the WorkOS namespace, including tokens
+// returned by refresh that do not look like JWTs. ClinePass API keys must not
+// use this helper; they are kept verbatim by the auth descriptor.
+export function toClineOAuthToken(token) {
+  if (typeof token !== "string") return "";
+  const trimmed = token.trim();
+  if (!trimmed) return "";
+  return trimmed.toLowerCase().startsWith("workos:") ? trimmed : `workos:${trimmed}`;
+}
+
 export function getClineAuthorizationHeader(token) {
   const accessToken = getClineAccessToken(token);
   return accessToken ? `Bearer ${accessToken}` : "";

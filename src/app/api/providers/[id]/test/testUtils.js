@@ -16,11 +16,10 @@ import {
   ANTIGRAVITY_CONFIG,
   KIRO_CONFIG,
   CLAUDE_CONFIG,
-  CLINE_CONFIG,
   KILOCODE_CONFIG,
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
-import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -183,7 +182,7 @@ export function classifyOAuthProbeResult(res, config, bodyText = "") {
 async function probeClineAccessToken(accessToken) {
   const res = await fetch("https://api.cline.bot/api/v1/users/me", {
     method: "GET",
-    headers: buildClineHeaders(accessToken, {
+    headers: buildClineHeaders(toClineOAuthToken(accessToken), {
       Accept: "application/json",
     }),
   });
@@ -261,7 +260,7 @@ async function refreshOAuthToken(connection) {
       return { accessToken: data.access_token, expiresIn: data.expires_in, refreshToken: data.refresh_token || refreshToken };
     }
 
-    if (provider === "codex" || provider === "grok-cli" || provider === "xai") {
+    if (provider === "codex" || provider === "grok-cli" || provider === "xai" || provider === "cline") {
       return await refreshProviderCredentials(provider, connection, console);
     }
 
@@ -304,29 +303,6 @@ async function refreshOAuthToken(connection) {
       if (!response.ok) return null;
       const data = await response.json();
       return { accessToken: data.accessToken, expiresIn: data.expiresIn || 3600, refreshToken: data.refreshToken || refreshToken };
-    }
-
-    if (provider === "cline") {
-      const response = await fetch(CLINE_CONFIG.refreshUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          refreshToken,
-          grantType: "refresh_token",
-          clientType: "extension",
-        }),
-      });
-      if (!response.ok) return null;
-      const payload = await response.json();
-      const data = payload?.data || payload;
-      const expiresIn = data?.expiresAt
-        ? Math.max(1, Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000))
-        : 3600;
-      return {
-        accessToken: data?.accessToken,
-        expiresIn,
-        refreshToken: data?.refreshToken || refreshToken,
-      };
     }
 
     return null;
@@ -391,15 +367,21 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
 
   if (connection.provider === "cline") {
     const tryProbe = async (token) => {
-      const res = await probeClineAccessToken(token);
-      if (res.ok) return { valid: true, error: null, refreshed, newTokens };
-      if (res.status === 401) return { valid: false, error: "Token invalid or revoked", refreshed };
-      if (res.status === 403) return { valid: false, error: "Access denied", refreshed };
-      return { valid: false, error: `API returned ${res.status}`, refreshed };
+      // A failed probe must still return refreshed tokens for persistence:
+      // upstream may have rotated the old refresh token during the refresh.
+      try {
+        const res = await probeClineAccessToken(token);
+        if (res.ok) return { valid: true, error: null, refreshed, newTokens };
+        const error = res.status === 401 ? "Token invalid or revoked"
+          : res.status === 403 ? "Access denied" : `API returned ${res.status}`;
+        return { valid: false, error, refreshed, newTokens };
+      } catch (error) {
+        return { valid: false, error: error.message || "Cline connection probe failed", refreshed, newTokens };
+      }
     };
 
     const initial = await tryProbe(accessToken);
-    if (initial.valid || initial.error !== "Token invalid or revoked" || !connection.refreshToken) {
+    if (initial.valid || refreshed || initial.error !== "Token invalid or revoked" || !connection.refreshToken) {
       return initial;
     }
 

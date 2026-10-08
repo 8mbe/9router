@@ -4,6 +4,7 @@ import {
   getClineAccessToken,
   getClineAuthorizationHeader,
 } from "../../open-sse/shared/clineAuth.js";
+import { DefaultExecutor } from "../../open-sse/executors/default.js";
 
 test("getClineAccessToken keeps an existing workos: prefix", () => {
   const token = "workos:eyJhbGciOiJSUzI1NiJ9.eyJwYXAiJ9";
@@ -37,4 +38,14 @@ test("getClineAuthorizationHeader builds a Bearer header without double prefixin
     getClineAuthorizationHeader("workos:eyJpeg.eyJbG"),
     "Bearer workos:eyJpeg.eyJbG"
   );
+});
+
+test("DefaultExecutor keeps the WorkOS prefix after generic auth is applied", () => {
+  const headers = new DefaultExecutor("cline").buildHeaders({ accessToken: "opaque-refreshed-token" });
+  assert.equal(headers.Authorization, "Bearer workos:opaque-refreshed-token");
+});
+
+test("ClinePass API keys remain unprefixed", () => {
+  const headers = new DefaultExecutor("clinepass").buildHeaders({ apiKey: "clp_test" });
+  assert.equal(headers.Authorization, "Bearer clp_test");
 });

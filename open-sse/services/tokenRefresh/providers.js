@@ -147,12 +147,15 @@ export async function refreshKimiToken(refreshToken, credentials, log) {
   return refreshAccessToken("kimi", refreshToken, credentials, log);
 }
 
-export async function refreshClineToken(refreshToken, log) {
+export async function refreshClineToken(refreshToken, log, proxyOptions = null) {
   if (!refreshToken) return null;
 
   return dedupRefresh("cline", refreshToken, async () => {
     try {
-      const response = await fetch(PROVIDERS.cline?.refreshUrl, {
+      const fetchRefresh = proxyOptions
+        ? (url, init) => proxyAwareFetch(url, init, proxyOptions)
+        : fetch;
+      const response = await fetchRefresh(PROVIDERS.cline?.refreshUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -186,6 +189,7 @@ export async function refreshClineToken(refreshToken, log) {
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken || refreshToken,
         expiresIn,
+        lastRefreshAt: new Date().toISOString(),
       };
     } catch (error) {
       log?.error?.("TOKEN_REFRESH", `Error refreshing Cline token: ${error.message}`);
