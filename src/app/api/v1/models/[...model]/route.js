@@ -1,4 +1,5 @@
 import { buildModelsList } from "../route.js";
+import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 
 // URL slug → service kind(s). `web` covers both webSearch and webFetch.
 const KIND_SLUG_MAP = {
@@ -43,18 +44,20 @@ export async function GET(request, { params }) {
     const path = Array.isArray(model) ? model : [model];
     const identifier = path.filter(Boolean).join("/");
     const kindFilter = path.length === 1 ? KIND_SLUG_MAP[identifier] : null;
+    const keyAccess = await getKeyAccessContext(request);
 
     if (kindFilter) {
       const skipDynamicFetch = request.headers.get("x-9r-internal-models-fetch") === "1";
-      const data = skipDynamicFetch
+      const rawList = skipDynamicFetch
         ? await buildModelsList(kindFilter, { skipDynamicFetch: true })
         : await buildModelsList(kindFilter);
+      const data = await filterModelsListForKey(keyAccess, rawList);
       return json({ object: "list", data });
     }
 
     // Match the same LLM catalog exposed by GET /v1/models. A catch-all
     // parameter is required because provider-prefixed IDs contain a slash.
-    const models = await buildModelsList([LLM_KIND]);
+    const models = await filterModelsListForKey(keyAccess, await buildModelsList([LLM_KIND]));
     const matchedModel = models.find((candidate) => candidate.id === identifier);
 
     if (!matchedModel) {
