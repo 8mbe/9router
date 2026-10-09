@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import PropTypes from "prop-types";
 import { Badge, Button, Input, Modal, Select } from "@/shared/components";
 import CompatibleMediaKindsField from "@/shared/components/CompatibleMediaKindsField";
@@ -51,6 +51,13 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
   const [checkModelId, setCheckModelId] = useState("");
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const saveErrorId = useId();
+
+  const handleClose = () => {
+    setSaveError(null);
+    onClose();
+  };
 
   // openai: reset baseUrl when apiType changes; anthropic: reset checks when opened
   useEffect(() => {
@@ -66,6 +73,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSubmitting(true);
+    setSaveError(null);
     try {
       const res = await fetch("/api/provider-nodes", {
         method: "POST",
@@ -79,15 +87,22 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           type: config.type,
         }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        onCreated(data.node);
-        setFormData(initialFormData());
-        setCheckKey("");
-        setValidationResult(null);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw Object.assign(new Error(data.error || "Failed to create provider"), {
+          field: data.field,
+        });
       }
+      onCreated(data.node);
+      setFormData(initialFormData());
+      setCheckKey("");
+      setValidationResult(null);
     } catch (error) {
-      console.log(`Error creating ${config.errorLabel} node:`, error);
+      const message = error.message || "Failed to create provider";
+      setSaveError({
+        message,
+        field: error.field,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -137,7 +152,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
   };
 
   return (
-    <Modal isOpen={isOpen} title={config.title} onClose={onClose}>
+    <Modal isOpen={isOpen} title={config.title} onClose={handleClose}>
       <div className="flex flex-col gap-4">
         <Input
           label="Name"
@@ -149,9 +164,15 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
         <Input
           label="Prefix"
           value={formData.prefix}
-          onChange={(e) => setFormData({ ...formData, prefix: e.target.value })}
+          onChange={(e) => {
+            setFormData({ ...formData, prefix: e.target.value });
+            setSaveError(null);
+          }}
           placeholder={config.prefixPlaceholder}
           hint="Required. Used as the provider prefix for model IDs."
+          error={saveError?.field === "prefix" ? saveError.message : undefined}
+          aria-invalid={saveError?.field === "prefix" || undefined}
+          aria-describedby={saveError?.field === "prefix" ? saveErrorId : undefined}
         />
         {config.hasApiType && (
           <Select
@@ -198,6 +219,15 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           </Button>
           {renderValidationResult()}
         </div>
+        {saveError && (
+          <p
+            id={saveErrorId}
+            role="alert"
+            className={saveError.field === "prefix" ? "sr-only" : "text-sm text-red-500 break-words"}
+          >
+            {saveError.message}
+          </p>
+        )}
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             onClick={handleSubmit}
@@ -211,7 +241,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           >
             {submitting ? "Creating..." : "Create"}
           </Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>
+          <Button onClick={handleClose} variant="ghost" fullWidth>
             Cancel
           </Button>
         </div>

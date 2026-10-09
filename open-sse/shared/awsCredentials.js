@@ -143,7 +143,11 @@ async function readProfileCredentials(
 
   let fromIni;
   try {
-    ({ fromIni } = await loadCredentialProviders());
+    const credentialProviders = await loadCredentialProviders();
+    if (typeof credentialProviders?.fromIni !== "function") {
+      throw new Error("the package did not expose fromIni");
+    }
+    ({ fromIni } = credentialProviders);
   } catch (error) {
     throw new Error(
       `Bedrock profile mode needs the ${AWS_CREDENTIAL_PROVIDERS_MODULE} package, which failed ` +

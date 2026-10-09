@@ -3,6 +3,7 @@ import { createProviderNode, getProviderNodes } from "@/models";
 import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX } from "@/shared/constants/providers";
 import { generateId } from "@/shared/utils";
 import { normalizeCompatibleMediaKinds } from "@/shared/utils/compatibleMedia";
+import { getProviderPrefixError } from "@/shared/constants/providerPrefixes.js";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +40,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
-    if (!prefix?.trim()) {
-      return NextResponse.json({ error: "Prefix is required" }, { status: 400 });
+    const prefixError = getProviderPrefixError(prefix);
+    if (prefixError) {
+      return NextResponse.json({ error: prefixError, field: "prefix" }, { status: 400 });
     }
 
     // Determine type
@@ -100,6 +102,9 @@ export async function POST(request) {
 
     return NextResponse.json({ error: "Invalid provider node type" }, { status: 400 });
   } catch (error) {
+    if (error.code === "PROVIDER_PREFIX_CONFLICT") {
+      return NextResponse.json({ error: error.message, field: "prefix" }, { status: 400 });
+    }
     console.log("Error creating provider node:", error);
     return NextResponse.json({ error: "Failed to create provider node" }, { status: 500 });
   }

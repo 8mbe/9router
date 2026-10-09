@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import CompatibleMediaKindsField from "@/shared/components/CompatibleMediaKindsField";
@@ -18,6 +18,13 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
   const [checkModelId, setCheckModelId] = useState("");
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const saveErrorId = useId();
+
+  const handleClose = () => {
+    setSaveError(null);
+    onClose();
+  };
 
   useEffect(() => {
     if (node) {
@@ -39,6 +46,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const payload = {
         name: formData.name,
@@ -50,6 +58,12 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         payload.mediaKinds = formData.mediaKinds;
       }
       await onSave(payload);
+    } catch (error) {
+      const message = error.message || "Failed to save provider";
+      setSaveError({
+        message,
+        field: error.field,
+      });
     } finally {
       setSaving(false);
     }
@@ -80,7 +94,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
   if (!node) return null;
 
   return (
-    <Modal isOpen={isOpen} title={`Edit ${isAnthropic ? "Anthropic" : "OpenAI"} Compatible`} onClose={onClose}>
+    <Modal isOpen={isOpen} title={`Edit ${isAnthropic ? "Anthropic" : "OpenAI"} Compatible`} onClose={handleClose}>
       <div className="flex flex-col gap-4">
         <Input
           label="Name"
@@ -92,9 +106,15 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         <Input
           label="Prefix"
           value={formData.prefix}
-          onChange={(e) => setFormData({ ...formData, prefix: e.target.value })}
+          onChange={(e) => {
+            setFormData({ ...formData, prefix: e.target.value });
+            setSaveError(null);
+          }}
           placeholder={isAnthropic ? "ac-prod" : "oc-prod"}
           hint="Required. Used as the provider prefix for model IDs."
+          error={saveError?.field === "prefix" ? saveError.message : undefined}
+          aria-invalid={saveError?.field === "prefix" || undefined}
+          aria-describedby={saveError?.field === "prefix" ? saveErrorId : undefined}
         />
         {!isAnthropic && (
           <Select
@@ -143,11 +163,20 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
             {validationResult === "success" ? "Valid" : "Invalid"}
           </Badge>
         )}
+        {saveError && (
+          <p
+            id={saveErrorId}
+            role="alert"
+            className={saveError.field === "prefix" ? "sr-only" : "text-sm text-red-500 break-words"}
+          >
+            {saveError.message}
+          </p>
+        )}
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim() || saving}>
             {saving ? "Saving..." : "Save"}
           </Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>
+          <Button onClick={handleClose} variant="ghost" fullWidth>
             Cancel
           </Button>
         </div>

@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
@@ -8,6 +9,9 @@ const tracingRoot = process.env.NEXT_TRACING_ROOT_MODE === "workspace"
   ? join(projectRoot, "..")
   : projectRoot;
 const proxyClientMaxBodySize = process.env.NINEROUTER_PROXY_CLIENT_MAX_BODY_SIZE || "128mb";
+const awsCredentialProvidersInstalled = [projectRoot, tracingRoot].some((root) =>
+  existsSync(join(root, "node_modules/@aws-sdk/credential-providers/package.json")),
+);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -44,6 +48,15 @@ const nextConfig = {
     optimizePackageImports: ["@xyflow/react", "@dnd-kit/core", "@dnd-kit/sortable", "material-symbols", "marked"],
   },
   webpack: (config, { isServer }) => {
+    // AWS SSO support is optional. Keep an older install (or a minimal install that
+    // intentionally omits optional dependencies) buildable; profile connections will
+    // still receive the explicit missing-dependency error from awsCredentials.js.
+    if (isServer && !awsCredentialProvidersInstalled) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        "@aws-sdk/credential-providers": false,
+      };
+    }
     // Ignore fs/path modules in browser bundle
     if (!isServer) {
       config.resolve.fallback = {

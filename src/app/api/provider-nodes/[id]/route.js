@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteProviderConnectionsByProvider, deleteProviderNode, getProviderConnections, getProviderNodeById, updateProviderConnection, updateProviderNode } from "@/models";
 import { normalizeCompatibleMediaKinds } from "@/shared/utils/compatibleMedia";
+import { getProviderPrefixError } from "@/shared/constants/providerPrefixes.js";
 
 // PUT /api/provider-nodes/[id] - Update provider node
 export async function PUT(request, { params }) {
@@ -18,8 +19,9 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
-    if (!prefix?.trim()) {
-      return NextResponse.json({ error: "Prefix is required" }, { status: 400 });
+    const prefixError = getProviderPrefixError(prefix);
+    if (prefixError) {
+      return NextResponse.json({ error: prefixError, field: "prefix" }, { status: 400 });
     }
 
     // Only validate apiType for OpenAI Compatible nodes
@@ -78,6 +80,9 @@ export async function PUT(request, { params }) {
 
     return NextResponse.json({ node: updated });
   } catch (error) {
+    if (error.code === "PROVIDER_PREFIX_CONFLICT") {
+      return NextResponse.json({ error: error.message, field: "prefix" }, { status: 400 });
+    }
     console.log("Error updating provider node:", error);
     return NextResponse.json({ error: "Failed to update provider node" }, { status: 500 });
   }

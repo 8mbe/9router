@@ -358,21 +358,20 @@ export default function ProviderDetailPage() {
   }, [providerId, isCompatible]);
 
   const handleUpdateNode = async (formData) => {
-    try {
-      const res = await fetch(`/api/provider-nodes/${providerId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+    const res = await fetch(`/api/provider-nodes/${providerId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(formData),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw Object.assign(new Error(data.error || "Failed to save provider"), {
+        field: data.field,
       });
-      const data = await res.json();
-      if (res.ok) {
-        setProviderNode(data.node);
-        await fetchConnections();
-        setShowEditNodeModal(false);
-      }
-    } catch (error) {
-      console.log("Error updating provider node:", error);
     }
+    setProviderNode(data.node);
+    await fetchConnections();
+    setShowEditNodeModal(false);
   };
 
   const saveProviderStrategy = async (strategy, stickyLimit) => {
