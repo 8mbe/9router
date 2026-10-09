@@ -90,6 +90,48 @@ export function createSSEStream(options = {}) {
   let finalized = false;
   let completionFlushTimer = null;
 
+  // Keep the upstream's terminal evidence separate from the [DONE] we append
+  // at EOF. A successful HTTP response alone does not explain why a tool loop
+  // stopped, and the synthesized sentinel must not look like upstream evidence.
+  const completionMetadata = mode === STREAM_MODE.PASSTHROUGH && sourceFormat === FORMATS.OPENAI
+    ? { finishReason: null, toolCallCount: 0, upstreamDoneSeen: false }
+    : null;
+  const emittedToolCalls = new Set();
+  const toolCallsByChoice = new Map();
+
+  const observeOpenAIChunk = (parsed) => {
+    if (!completionMetadata) return;
+    const finishReason = parsed.choices?.[0]?.finish_reason;
+    if (finishReason) completionMetadata.finishReason = finishReason;
+    for (const [choicePosition, choice] of (Array.isArray(parsed.choices) ? parsed.choices : []).entries()) {
+      const toolCalls = choice.delta?.tool_calls;
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) continue;
+      const choiceIndex = choice.index ?? choicePosition;
+      if (!toolCallsByChoice.has(choiceIndex)) {
+        toolCallsByChoice.set(choiceIndex, { byIndex: new Map(), byId: new Map() });
+      }
+      const calls = toolCallsByChoice.get(choiceIndex);
+      for (const [toolPosition, toolCall] of toolCalls.entries()) {
+        const index = toolCall.index ?? toolPosition;
+        const byId = toolCall.id ? calls.byId.get(toolCall.id) : null;
+        const byIndex = calls.byIndex.get(index);
+        // If an upstream omits indices, two different ids still identify two
+        // calls even when they arrive at position zero in separate chunks.
+        const sameIndexCall = byIndex && (toolCall.index !== undefined || !toolCall.id || !byIndex.id || byIndex.id === toolCall.id)
+          ? byIndex : null;
+        const call = byId || sameIndexCall || {};
+        // An id can arrive after argument fragments. Bind both aliases to the
+        // same call so repeated or split deltas count once.
+        if (byId && sameIndexCall && byId !== sameIndexCall) emittedToolCalls.delete(sameIndexCall);
+        if (toolCall.id) call.id = toolCall.id;
+        calls.byIndex.set(index, call);
+        if (toolCall.id) calls.byId.set(toolCall.id, call);
+        emittedToolCalls.add(call);
+      }
+    }
+    completionMetadata.toolCallCount = emittedToolCalls.size;
+  };
+
   // Usage/logging tail, callable from transform() as well as flush(): a client that
   // closes right after the terminal event cancels the reader, and flush() never runs.
   const finalizeStream = () => {
@@ -115,7 +157,7 @@ export function createSSEStream(options = {}) {
       onStreamComplete({
         content: accumulatedContent,
         thinking: accumulatedThinking
-      }, finalUsage, ttftAt);
+      }, finalUsage, ttftAt, completionMetadata ? { ...completionMetadata } : undefined);
     }
   };
 
@@ -164,6 +206,10 @@ export function createSSEStream(options = {}) {
           let injectedUsage = false;
           let responsesTerminal = false;
 
+          if (completionMetadata && trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]") {
+            completionMetadata.upstreamDoneSeen = true;
+          }
+
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
@@ -208,6 +254,8 @@ export function createSSEStream(options = {}) {
               if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
                 continue;
               }
+
+              observeOpenAIChunk(parsed);
 
               const delta = parsed.choices?.[0]?.delta;
               const content = delta?.content;
@@ -431,6 +479,13 @@ export function createSSEStream(options = {}) {
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
           if (buffer) {
+            if (completionMetadata && buffer.trim().startsWith("data:")) {
+              const tailData = buffer.trim().slice(5).trim();
+              if (tailData === "[DONE]") completionMetadata.upstreamDoneSeen = true;
+              else {
+                try { observeOpenAIChunk(JSON.parse(tailData)); } catch { /* forwarded verbatim below */ }
+              }
+            }
             let output = buffer;
             if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
               output = "data: " + buffer.slice(5);
@@ -553,9 +608,10 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, sourceFormat = FORMATS.OPENAI) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
+    sourceFormat,
     provider,
     reqLogger,
     model,

@@ -10,7 +10,8 @@ const providerRuleFor = (provider) => PROVIDERS[provider]?.reasoningInject;
 
 // Model-level rules: matched by predicate against model id
 const MODEL_RULES = [
-  { match: m => /^kimi-/i.test(m || ""), scope: "toolCalls" },
+  // Gateways namespace model ids (e.g. moonshotai/kimi-k3); match the final segment.
+  { match: m => /(?:^|\/)kimi-[^/]*$/i.test(m || ""), scope: "toolCalls" },
   { match: m => /deepseek/i.test(m || ""), scope: "all" }
 ];
 
