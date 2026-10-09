@@ -10,6 +10,7 @@ import { refreshClineToken } from "../services/tokenRefresh/providers.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
+import { CLAUDE_CODE } from "../config/claudeCodeConstants.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -188,6 +189,8 @@ export class DefaultExecutor extends BaseExecutor {
     // Client-sent beta flags (e.g. a newer Claude Code) are unioned in so a
     // feature the client opted into is not dropped on the way upstream.
     const clientBeta = credentials?.rawHeaders?.["anthropic-beta"];
+    const runtimeHop = credentials?.rawHeaders?.[CLAUDE_CODE.runtimeHopHeader];
+    if (runtimeHop && this.provider?.startsWith?.(CLAUDE_CODE.providerPrefix)) headers[CLAUDE_CODE.runtimeHopHeader] = runtimeHop;
     if (model && (this.provider === "claude" || this.provider === "anthropic"
       || (this.provider?.startsWith?.("anthropic-compatible-") && isClaudeModel))) {
       headers["Anthropic-Beta"] = mergeAnthropicBeta(selectAnthropicBeta(model, body, credentials?.contextMarker), clientBeta);

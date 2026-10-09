@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import PropTypes from "prop-types";
 import Modal from "@/shared/components/Modal";
 import Input from "@/shared/components/Input";
@@ -30,6 +30,8 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [executionMode, setExecutionMode] = useState("direct");
+  const executionModeHintId = useId();
 
   useEffect(() => {
     if (connection) {
@@ -38,6 +40,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         priority: connection.priority || 1,
         apiKey: "",
       });
+      setExecutionMode(connection.providerSpecificData?.executionMode === "claude-code" ? "claude-code" : "direct");
       // Load Azure-specific data if present
       if (connection.provider === "azure" && connection.providerSpecificData) {
         setAzureData({
@@ -74,6 +77,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const isOAuth = connection?.authType === "oauth";
   const isAzure = connection?.provider === "azure";
   const isCloudflareAi = connection?.provider === "cloudflare-ai";
+  const isCustomAnthropic = isAnthropicCompatibleProvider(connection?.provider);
   const usesAwsCredentialForm = AI_PROVIDERS?.[connection?.provider]?.credentialForm === "aws";
   const isCompatible = connection
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
@@ -125,6 +129,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
           ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
           ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
+          ...(isCustomAnthropic ? { providerSpecificData: { ...connection.providerSpecificData, executionMode } } : {}),
         }),
       });
       const data = await res.json();
@@ -161,6 +166,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
                 ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
                 ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
+                ...(isCustomAnthropic ? { providerSpecificData: { ...connection.providerSpecificData, executionMode } } : {}),
               }),
             });
             const data = await res.json();
@@ -197,6 +203,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       // Persist updated region for region-aware providers
       if (providerRegions && region) {
         updates.providerSpecificData = buildRegionSpecificData();
+      }
+      if (isCustomAnthropic) {
+        updates.providerSpecificData = { executionMode };
       }
       
       await onSave(updates);
@@ -253,6 +262,28 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
               </Badge>
             )}
           </>
+        )}
+
+        {isCustomAnthropic && (
+          <div className="flex flex-col gap-1.5">
+            <label className="flex min-h-10 items-center gap-2 text-sm font-medium text-text-main cursor-pointer">
+              <input
+                type="checkbox"
+                checked={executionMode === "claude-code"}
+                onChange={(e) => setExecutionMode(e.target.checked ? "claude-code" : "direct")}
+                disabled={saving}
+                aria-describedby={`${executionModeHintId} ${executionModeHintId}-header`}
+                className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              />
+              Use server Claude Code
+            </label>
+            <p id={executionModeHintId} className="text-xs text-text-muted">
+              Other clients use server Claude Code; Claude Code clients connect directly.
+            </p>
+            <p id={`${executionModeHintId}-header`} className="text-xs text-text-muted break-words">
+              Unrecognized clients can opt in with <code>x-9router-client-mode: harness</code>.
+            </p>
+          </div>
         )}
 
         {isAzure && (

@@ -32,6 +32,8 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { shouldUseClaudeCodeRuntime } from "../shared/claudeCode/policy.js";
+import { CLAUDE_CODE } from "../config/claudeCodeConstants.js";
 
 const STREAM_DEFAULT_OFF_FORMATS = new Set([FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, FORMATS.CLAUDE]);
 
@@ -62,7 +64,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, runtimeOwnerId, runtimeConversationId, clientMode }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
   // Stable per-session color so all lines of one CLI conversation share a tag
@@ -76,9 +78,25 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const reqTag = log?.tagForSession ? log.tagForSession(sessionSeed) : (log?.nextTag ? log.nextTag() : "");
 
   const sourceFormat = sourceFormatOverride || detectFormat(body);
+  const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
+  if (credentials) {
+    credentials.rawHeaders = clientRawRequest?.headers || credentials.rawHeaders || {};
+    credentials.runtimeOwnerId = runtimeOwnerId || credentials.runtimeOwnerId;
+    credentials.runtimeConversationId = runtimeConversationId || credentials.runtimeConversationId;
+    credentials.clientMode = clientMode || credentials.clientMode;
+  }
+  const runtimeBridge = shouldUseClaudeCodeRuntime(provider, { credentials, clientTool, clientMode, body });
+  if (credentials?.runtimeSessionId && !runtimeBridge) {
+    return createErrorResult(409, "Server Claude Code is disabled for this conversation; start a new conversation", undefined, { "x-should-retry": "false" });
+  }
+  if (runtimeBridge && sourceFormat !== FORMATS.CLAUDE) {
+    return createErrorResult(HTTP_STATUS.BAD_REQUEST, "Server Claude Code currently supports /v1/messages only", undefined, { "x-should-retry": "false" });
+  }
+  const preserveClaudeWire = sourceFormat === FORMATS.CLAUDE && provider.startsWith(CLAUDE_CODE.providerPrefix) &&
+    (runtimeBridge || clientTool === "claude" || credentials?.clientMode === CLAUDE_CODE.directMode || credentials?.clientMode === CLAUDE_CODE.executionMode);
 
   // Check for bypass patterns (warmup, skip, cc naming)
-  const bypassResponse = handleBypassRequest(body, model, userAgent, ccFilterNaming);
+  const bypassResponse = preserveClaudeWire ? null : handleBypassRequest(body, model, userAgent, ccFilterNaming);
   if (bypassResponse) return bypassResponse;
 
   const alias = PROVIDER_ID_TO_ALIAS[provider] || provider;
@@ -116,7 +134,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Inject provider-level thinking config override (only if client hasn't set)
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
-  if (providerThinking?.mode && providerThinking.mode !== "auto") {
+  if (!preserveClaudeWire && providerThinking?.mode && providerThinking.mode !== "auto") {
     const mode = providerThinking.mode;
     if (mode === "on" && !body.thinking) {
       console.log("Injecting provider-level thinking config override: on");
@@ -129,7 +147,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   // Per-request opt-out: client can bypass all token savers via header
-  const tokenSaverEnabled = clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
+  const tokenSaverEnabled = !preserveClaudeWire && clientRawRequest?.headers?.[TOKEN_SAVER_HEADER]?.toLowerCase() !== "off";
 
   // Cursor's translator rewrites tool_result into user text, so RTK must run on
   // the source body before translation. Every other pair translates the tool
@@ -179,8 +197,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Native passthrough: CLI tool and provider are the same ecosystem
   // Skip all translation/normalization — only model and Bearer are swapped
-  const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
-  const passthrough = isNativePassthrough(clientTool, provider);
+  const passthrough = preserveClaudeWire || isNativePassthrough(clientTool, provider);
 
   // Expose raw client headers to translators/executors for session-id resolution
   if (credentials) credentials.rawHeaders = clientRawRequest?.headers || {};
@@ -217,7 +234,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       }
     }
     // Normalize newer Cowork/CC beta shapes (adaptive thinking, mid-conversation system) the API rejects
-    if (clientTool === "claude") normalizeClaudePassthrough(translatedBody, translatedBody.model);
+    if (clientTool === "claude" && !preserveClaudeWire) normalizeClaudePassthrough(translatedBody, translatedBody.model);
   } else {
     translatedBody = translateRequest(sourceFormat, targetFormat, upstreamModel, body, stream, credentials, provider, reqLogger, stripList, connectionId, clientTool);
     if (!translatedBody) {
@@ -234,7 +251,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Tool normalization: MCP-equivalent built-in dedup (Claude clients) + same-name
   // dedup for DeepSeek models (upstream rejects duplicate tool names on all endpoints).
-  if (Array.isArray(translatedBody.tools)) {
+  if (!preserveClaudeWire && Array.isArray(translatedBody.tools)) {
     const { tools: deduped, stripped } = dedupeTools(translatedBody.tools, { clientTool, model });
     if (stripped.length > 0) {
       translatedBody.tools = deduped;
@@ -279,7 +296,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // requireClaudeToolType get the explicit type. Applying it unconditionally breaks
   // Claude-format endpoints that only accept the legacy typeless tool shape — DeepSeek's
   // Anthropic-compatible endpoint 400s with "unknown variant `custom`" (#3905).
-  if (shouldDefaultClaudeToolType(provider, finalFormat, translatedBody.tools, PROVIDERS)) {
+  if (!preserveClaudeWire && shouldDefaultClaudeToolType(provider, finalFormat, translatedBody.tools, PROVIDERS)) {
     translatedBody.tools = defaultClaudeToolType(translatedBody.tools);
   }
 
@@ -317,7 +334,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // PXPIPE: image bulky context (Claude-format bodies only), last saver before dispatch
   let pxpipeSummary = null;
-  if (pxpipeEnabled) {
+  if (!preserveClaudeWire && pxpipeEnabled) {
     const pxpipeResult = await compressWithPxpipe(translatedBody, {
       enabled: true, format: finalFormat, model: upstreamModel,
       minChars: pxpipeMinChars, timeoutMs: pxpipeTimeoutMs, transform: pxpipeTransform,
@@ -332,9 +349,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Pin cache breakpoints to the final body — every saver above can reshape
   // system/tools/messages, and a stale anchor costs a full prefix rewrite.
-  if (passthrough && clientTool === "claude") anchorClaudeCache(translatedBody);
+  if (passthrough && clientTool === "claude" && !preserveClaudeWire) anchorClaudeCache(translatedBody);
 
-  const executor = getExecutor(provider);
+  const executor = getExecutor(provider, { credentials, clientTool, clientMode, body });
   trackPendingRequest(model, provider, connectionId, true);
   appendRequestLog({ model, provider, connectionId, status: "PENDING" }).catch(() => { });
 
@@ -412,6 +429,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
   } catch (error) {
+    const errorStatus = runtimeBridge ? (error.statusCode || HTTP_STATUS.BAD_GATEWAY) : HTTP_STATUS.BAD_GATEWAY;
     trackPendingRequest(model, provider, connectionId, false, true);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
@@ -429,11 +447,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       streamController.handleError(error);
       return createErrorResult(499, "Request aborted");
     }
-    const errMsg = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
+    const errMsg = formatProviderError(error, provider, model, errorStatus);
     if (log?.errorLine) {
-      log.errorLine(reqTag, "✗", `ERROR 502 · ${provider}/${model} · ${Date.now() - requestStartTime}ms\n    ${errMsg}${error.stack ? `\n    ${error.stack}` : ""}`);
+      log.errorLine(reqTag, "✗", `ERROR ${errorStatus} · ${provider}/${model} · ${Date.now() - requestStartTime}ms\n    ${errMsg}${error.stack ? `\n    ${error.stack}` : ""}`);
     }
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, errMsg);
+    return createErrorResult(errorStatus, errMsg, undefined, runtimeBridge ? { "x-should-retry": "false" } : undefined);
   }
 
   // Handle 401/403 - try token refresh (skip for noAuth providers)

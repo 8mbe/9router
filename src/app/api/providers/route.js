@@ -8,7 +8,7 @@ import {
 } from "@/models";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
-import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
+import { normalizeProviderId, normalizeProviderSpecificData, validateConnectionExecutionMode } from "@/lib/providerNormalization";
 import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 
 export const dynamic = "force-dynamic";
@@ -113,6 +113,10 @@ export async function POST(request) {
     if (!provider || !isValidProvider) {
       return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
     }
+    const executionModeError = validateConnectionExecutionMode(provider, body.providerSpecificData);
+    if (executionModeError) {
+      return NextResponse.json({ error: executionModeError }, { status: 400 });
+    }
     // A provider may declare a providerSpecificData field that stands in for an API key — e.g.
     // Bedrock's `profile`, where the credential lives in the local AWS config and there is no
     // key to paste. Without this, following such a provider's own setup notice returns 400.
@@ -148,6 +152,7 @@ export async function POST(request) {
         return NextResponse.json({ error: "Anthropic Compatible node not found" }, { status: 404 });
       }
       providerSpecificData = {
+        ...providerSpecificData,
         prefix: node.prefix,
         baseUrl: node.baseUrl,
         nodeName: node.name,

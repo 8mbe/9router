@@ -21,6 +21,12 @@ import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActi
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
+import { detectClientTool } from "open-sse/utils/clientDetector.js";
+import { getClaudeCodeContinuation } from "open-sse/shared/claudeCode/sessions.js";
+import { getApiKeyByKey } from "@/lib/db/repos/apiKeysRepo.js";
+import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
+import { assertNoClaudeCodeLoop } from "open-sse/shared/claudeCode/loopGuard.js";
+import { isClaudeCodeRuntimeClient } from "open-sse/shared/claudeCode/policy.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
@@ -29,7 +35,49 @@ import { resolveAutoCombo } from "../services/autoCombo.js";
 import { markAutoComboHealthy, markAutoComboUnavailable } from "open-sse/services/autoComboHealth.js";
 import { checkFallbackError } from "open-sse/services/accountFallback.js";
 import { AUTO_COMBO_STREAM_ERROR_TYPES, AUTO_COMBO_STREAM_FRAME_LIMIT } from "open-sse/config/autoComboConstants.js";
-import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
+import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels, extractClientApiKey } from "../services/keyAccess.js";
+
+const runtimeRequestContexts = new WeakMap();
+const runtimeClientModes = new Set([CLAUDE_CODE.directMode, CLAUDE_CODE.executionMode, "harness"]);
+
+async function getRuntimeRequestContext(request, body, apiKey) {
+  if (request && runtimeRequestContexts.has(request)) return runtimeRequestContexts.get(request);
+  const resolveContext = async () => {
+    const declaredMode = request?.headers?.get(CLAUDE_CODE.clientModeHeader)?.trim().toLowerCase() || null;
+    if (declaredMode && !runtimeClientModes.has(declaredMode)) {
+      const error = new Error("Invalid x-9router-client-mode: expected direct, claude-code, or harness");
+      error.statusCode = HTTP_STATUS.BAD_REQUEST;
+      throw error;
+    }
+    const headers = request?.headers ? Object.fromEntries(request.headers.entries()) : {};
+    // Client declarations select a route; they never authenticate a session owner.
+    const runtimeClientTool = detectClientTool(headers, body);
+    const clientMode = runtimeClientTool === "claude" ? CLAUDE_CODE.executionMode : declaredMode;
+    const presentedKey = extractClientApiKey(request) || apiKey;
+    const keyRecord = presentedKey ? await getApiKeyByKey(presentedKey) : null;
+    return {
+      runtimeOwnerId: keyRecord?.isActive && keyRecord.id ? `api-key:${keyRecord.id}` : "anonymous:local",
+      runtimeConversationId: request?.headers?.get(CLAUDE_CODE.sessionHeader)?.trim() || null,
+      clientMode,
+      runtimeClientTool,
+    };
+  };
+  const context = resolveContext();
+  if (request) runtimeRequestContexts.set(request, context);
+  return context;
+}
+
+function runtimeContinuationError(error) {
+  const status = Number(error?.statusCode);
+  return errorResponse(status >= 400 && status <= 599 ? status : 409,
+    error?.message || "Claude Code session cannot be resumed", { "x-should-retry": "false" });
+}
+
+function preventResponseFallback(response) {
+  const headers = new Headers(response.headers);
+  headers.set("x-should-retry", "false");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 /**
  * Handle chat completion request
@@ -95,6 +143,8 @@ export async function handleChat(request, clientRawRequest = null) {
   // models. Checked once on the requested target, before bypass, combo expansion
   // and any credential lookup; an allowed combo grants the members it routes to.
   const keyAccess = await getKeyAccessContext(request);
+  try { assertNoClaudeCodeLoop(request.headers); }
+  catch (error) { return runtimeContinuationError(error); }
   const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr);
   if (keyAccessDenied) return keyAccessDenied;
 
@@ -281,6 +331,22 @@ async function handleProviderModelChat(body, { provider, model }, clientRawReque
 
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
+  let runtimeContext = null;
+  let runtimeContinuation = null;
+  if (provider.startsWith(CLAUDE_CODE.providerPrefix)) {
+    try {
+      runtimeContext = await getRuntimeRequestContext(request, body, apiKey);
+      if (isClaudeCodeRuntimeClient({ clientMode: runtimeContext.clientMode, clientTool: runtimeContext.runtimeClientTool })) {
+        runtimeContinuation = getClaudeCodeContinuation(body, {
+          ownerId: runtimeContext.runtimeOwnerId,
+          provider,
+          conversationId: runtimeContext.runtimeConversationId,
+        });
+      }
+    } catch (error) {
+      return runtimeContinuationError(error);
+    }
+  }
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
@@ -290,7 +356,15 @@ async function handleProviderModelChat(body, { provider, model }, clientRawReque
 
   while (true) {
     const requestedModel = contextMarker ? `${model}[${contextMarker}]` : model;
-    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { requestedModel });
+    const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, {
+      requestedModel,
+      ...(runtimeContinuation ? { preferredConnectionId: runtimeContinuation.connectionId } : {}),
+    });
+    // Account selection's preferred connection is a soft hint for normal calls.
+    // A suspended tool invocation must resume on its original account.
+    if (runtimeContinuation && (!credentials || credentials.allRateLimited || credentials.connectionId !== runtimeContinuation.connectionId)) {
+      return runtimeContinuationError({ statusCode: 409, message: "Claude Code session's upstream connection is unavailable" });
+    }
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -329,12 +403,19 @@ async function handleProviderModelChat(body, { provider, model }, clientRawReque
       modelInfo: { provider, model },
       // Carry the stripped `[1m]` marker to the executor: the 1M-context beta
       // flag is re-attached to anthropic-beta there, per provider and model.
-      credentials: contextMarker ? { ...refreshedCredentials, contextMarker } : refreshedCredentials,
+      credentials: {
+        ...refreshedCredentials,
+        ...(contextMarker ? { contextMarker } : {}),
+        ...(runtimeContext || {}),
+        ...(runtimeContext && request?.url ? { runtimeRequestUrl: request.url } : {}),
+        ...(runtimeContinuation ? { runtimeSessionId: runtimeContinuation.sessionId } : {}),
+      },
       log,
       clientRawRequest,
       connectionId: credentials.connectionId,
       userAgent,
       apiKey,
+      ...(runtimeContext || {}),
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
@@ -368,9 +449,19 @@ async function handleProviderModelChat(body, { provider, model }, clientRawReque
         // "Consecutive" strikes: a success clears the breaker for this pair.
         clearAntigravityStrikes(credentials.connectionId, model);
       }
+    }).catch((error) => {
+      if (!runtimeContinuation) throw error;
+      const response = runtimeContinuationError({
+        statusCode: error?.statusCode || HTTP_STATUS.BAD_GATEWAY,
+        message: "Claude Code runtime failed while resuming this session",
+      });
+      return { success: false, status: response.status, response };
     });
 
     if (result.success) return result.response;
+    if (runtimeContinuation || result.response?.headers?.get("x-should-retry") === "false") {
+      return preventResponseFallback(result.response);
+    }
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;
@@ -415,6 +506,9 @@ function withAutoComboHealth(handleSingleModel) {
       recordAutoComboFailure(modelStr, HTTP_STATUS.BAD_GATEWAY, error?.message || String(error));
       throw error;
     }
+    // Session conflicts and committed runtime turns describe this conversation,
+    // rather than the provider/model's availability for another conversation.
+    if (!response?.ok && response?.headers?.get("x-should-retry") === "false") return response;
     try {
       if (response?.ok) {
         if (response.body && response.headers.get("content-type")?.includes("text/event-stream")) {

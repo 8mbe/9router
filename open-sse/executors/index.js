@@ -29,6 +29,8 @@ import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
 import { MinimaxCodeExecutor } from "./minimax-code.js";
 import { DevinCliExecutor } from "./devin-cli.js";
+import { ClaudeCodeRuntimeExecutor } from "./claude-code-runtime.js";
+import { shouldUseClaudeCodeRuntime } from "../shared/claudeCode/policy.js";
 
 const executors = {
   antigravity: new AntigravityExecutor(),
@@ -77,8 +79,13 @@ const executors = {
 };
 
 const defaultCache = new Map();
+const claudeCodeCache = new Map();
 
-export function getExecutor(provider) {
+export function getExecutor(provider, context) {
+  if (shouldUseClaudeCodeRuntime(provider, context)) {
+    if (!claudeCodeCache.has(provider)) claudeCodeCache.set(provider, new ClaudeCodeRuntimeExecutor(provider));
+    return claudeCodeCache.get(provider);
+  }
   if (executors[provider]) return executors[provider];
   if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(provider));
   return defaultCache.get(provider);

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useId } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
-import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
@@ -20,6 +20,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
+  const isCustomAnthropic = isAnthropicCompatibleProvider(provider);
   // Capability, not identity: gating this on `provider === "bedrock"` left bedrock-xai with no
   // way to enter a profile at all, which is the same mistake as hardcoding the API-key exemption.
   const usesAwsCredentialForm =
@@ -60,6 +61,13 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const [modelChecking, setModelChecking] = useState(false);
   const [modelResult, setModelResult] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [executionModeState, setExecutionModeState] = useState({ provider, isOpen, value: "direct" });
+  const executionModeHintId = useId();
+  if (executionModeState.provider !== provider || executionModeState.isOpen !== isOpen) {
+    setExecutionModeState({ provider, isOpen, value: "direct" });
+  }
+  const executionMode = executionModeState.value;
+  const setExecutionMode = (value) => setExecutionModeState({ provider, isOpen, value });
   const bulkPlaceholder = isCloudflareAi
     ? `name1|sk-key1|acc123456\nname2|sk-key2|def789012\nsk-key-only-auto-named`
     : provider === "qoder" || provider === "qoder-cn"
@@ -71,6 +79,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   const [bulkResult, setBulkResult] = useState(null); // { success, failed }
 
   const buildProviderSpecificData = () => {
+    if (isCustomAnthropic) {
+      return { executionMode };
+    }
     if (isOllamaLocal && formData.ollamaHostUrl.trim()) {
       return { baseUrl: formData.ollamaHostUrl.trim() };
     }
@@ -250,7 +261,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             name: entry.name,
             priority: 1,
             testStatus: isValid ? "active" : "unknown",
-            ...(entry.providerSpecificData ? { providerSpecificData: entry.providerSpecificData } : {}),
+            ...(isCustomAnthropic
+              ? { providerSpecificData: { ...entry.providerSpecificData, executionMode } }
+              : entry.providerSpecificData ? { providerSpecificData: entry.providerSpecificData } : {}),
           }),
         });
         if (res.ok) success++;
@@ -275,6 +288,28 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           <div className="flex gap-2">
             <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
             <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
+          </div>
+        )}
+
+        {isCustomAnthropic && (
+          <div className="flex flex-col gap-1.5">
+            <label className="flex min-h-10 items-center gap-2 text-sm font-medium text-text-main cursor-pointer">
+              <input
+                type="checkbox"
+                checked={executionMode === "claude-code"}
+                onChange={(e) => setExecutionMode(e.target.checked ? "claude-code" : "direct")}
+                disabled={saving}
+                aria-describedby={`${executionModeHintId} ${executionModeHintId}-header`}
+                className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              />
+              Use server Claude Code
+            </label>
+            <p id={executionModeHintId} className="text-xs text-text-muted">
+              Other clients use server Claude Code; Claude Code clients connect directly.
+            </p>
+            <p id={`${executionModeHintId}-header`} className="text-xs text-text-muted break-words">
+              Unrecognized clients can opt in with <code>x-9router-client-mode: harness</code>.
+            </p>
           </div>
         )}
 

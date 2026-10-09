@@ -1,4 +1,6 @@
-const FORWARDED = new Set(["retry-after", "x-should-retry"]);
+import { CLAUDE_CODE } from "../config/claudeCodeConstants.js";
+
+const FORWARDED = new Set(["retry-after", "x-should-retry", CLAUDE_CODE.sessionHeader]);
 const FORWARDED_PREFIX = "anthropic-ratelimit-";
 
 export function upstreamResponseHeaders(headers) {

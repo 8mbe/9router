@@ -7,6 +7,7 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
+import { normalizeProviderSpecificData, validateConnectionExecutionMode } from "@/lib/providerNormalization";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -101,6 +102,11 @@ export async function PUT(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
+    const executionModeError = validateConnectionExecutionMode(existing.provider, providerSpecificData);
+    if (executionModeError) {
+      return NextResponse.json({ error: executionModeError }, { status: 400 });
+    }
+
     const proxyConfig = normalizeProxyConfig(body);
     if (proxyConfig.error) {
       return NextResponse.json({ error: proxyConfig.error }, { status: 400 });
@@ -137,10 +143,10 @@ export async function PUT(request, { params }) {
       if (isAwsCredential && incomingProviderSpecificData.sessionToken === "") {
         delete incomingProviderSpecificData.sessionToken;
       }
-      updateData.providerSpecificData = {
+      updateData.providerSpecificData = normalizeProviderSpecificData(existing.provider, {}, {
         ...(existing.providerSpecificData || {}),
         ...incomingProviderSpecificData,
-      };
+      }) || {};
       if (isAwsCredential && incomingProviderSpecificData.sessionToken === null) {
         delete updateData.providerSpecificData.sessionToken;
       }

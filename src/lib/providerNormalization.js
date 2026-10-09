@@ -1,4 +1,4 @@
-import { AI_PROVIDERS } from "../shared/constants/providers.js";
+import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "../shared/constants/providers.js";
 
 /**
  * Detect xAI Grok models by id pattern (grok-*, Grok_*, etc).
@@ -24,10 +24,27 @@ export function normalizeProviderId(provider) {
   return providerByName?.id || trimmed;
 }
 
+export function validateConnectionExecutionMode(provider, providerSpecificData) {
+  if (!providerSpecificData || !Object.prototype.hasOwnProperty.call(providerSpecificData, "executionMode")) {
+    return null;
+  }
+  if (!isAnthropicCompatibleProvider(provider)) {
+    return "Execution mode is only supported for custom Anthropic-compatible connections";
+  }
+  if (providerSpecificData.executionMode !== "direct" && providerSpecificData.executionMode !== "claude-code") {
+    return "Execution mode must be direct or claude-code";
+  }
+  return null;
+}
+
 export function normalizeProviderSpecificData(provider, body = {}, providerSpecificData = null) {
   const next = providerSpecificData && typeof providerSpecificData === "object"
     ? { ...providerSpecificData }
     : {};
+
+  if (isAnthropicCompatibleProvider(provider)) {
+    next.executionMode = next.executionMode ?? "direct";
+  }
 
   if (provider === "ollama-local") {
     const baseUrl = (

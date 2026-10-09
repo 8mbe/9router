@@ -27,11 +27,18 @@ const nextConfig = {
   // @aws-sdk/credential-providers must stay external for the same class of reason: it reads
   // ~/.aws/config and the SSO token cache from disk at runtime and resolves its credential
   // plugins by dynamic require, neither of which survives bundling.
-  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers"],
+  // The agent SDK resolves its bundled Claude Code executable relative to its
+  // own package. Keep that location intact in standalone deployments.
+  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers", "@anthropic-ai/claude-agent-sdk", "@modelcontextprotocol/sdk"],
   turbopack: {
     root: tracingRoot
   },
   outputFileTracingRoot: tracingRoot,
+  outputFileTracingIncludes: {
+    // The SDK resolves its optional platform binary using a computed package
+    // name, which static file tracing cannot discover.
+    "*": ["./node_modules/@anthropic-ai/claude-agent-sdk*/**/*"],
+  },
   outputFileTracingExcludes: {
     "*": ["./gitbook/**/*"]
   },

@@ -593,3 +593,15 @@ Environment variables actively used by code:
 - `GET /api/settings`
 - `GET /api/v1/models`
 - CLI target base URL should be `http://<host>:20128/v1` when `PORT=20128`
+
+## Server Claude Code on custom Anthropic connections
+
+Custom Anthropic connections can opt into `providerSpecificData.executionMode: "claude-code"` using the connection editor. Existing connections default to `"direct"`. Claude Code clients always use HTTP proxying to the configured upstream, even when the server mode is enabled. Unknown clients also stay direct. A custom harness can select the server bridge by sending `x-9router-client-mode: harness` on its `/v1/messages` requests.
+
+The bridge uses the pinned Claude Agent SDK and its packaged native runtime. It exposes only client tools through MCP. It returns a normal Anthropic assistant message with `stop_reason: "tool_use"`, retains the worker, and accepts the client's real `tool_result` blocks on the next request. The client executes the tools. Return the complete conversation and the `x-9router-session-id` response header on subsequent requests. Tool IDs also allow continuation discovery when the session header is unavailable.
+
+Workers are bound to the authenticated router key and original upstream connection. They reject changed model/system/tool configuration and edited histories. Results can contain text or base64 images and preserve tool error status. Built-in server tools are disabled. Duplicate recent requests replay the saved response, and failures do not fall back to another account or combo model.
+
+Server mode currently supports tracked conversations started with one user message, automatic tool choice, disabled thinking, and `max_tokens`. Importing an existing assistant history, sampling controls, forced tool choice, documents in tool results, and connection proxies require direct mode. Claude Code can add context and format tool-result text, so this mode does not provide byte-for-byte request transparency. Sessions expire after 15 idle minutes and do not survive a server restart.
+
+Standalone builds include the SDK's platform-specific optional binary. Build/install dependencies for the deployment OS, architecture and libc; retain optional dependencies. Protocol tests use the actual native runtime with a local mock API and no real upstream credentials.

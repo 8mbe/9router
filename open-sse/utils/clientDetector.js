@@ -24,6 +24,10 @@ export function detectClientTool(headers = {}, body = {}) {
   const initiator = (headers["x-initiator"] || headers["X-Initiator"] || "").toLowerCase();
   const originator = (headers["originator"] || "").toLowerCase();
 
+  // An explicit Claude Code identity takes precedence over generic extension
+  // headers such as x-initiator:user. Never nest a second Claude Code runtime.
+  if (ua.includes("claude-cli") || ua.includes("claude-code") || xApp === "cli") return "claude";
+
   // Antigravity: detected via body field (not header)
   if (body.userAgent === "antigravity") return "antigravity";
 
@@ -31,9 +35,6 @@ export function detectClientTool(headers = {}, body = {}) {
   if (ua.includes("githubcopilotchat") || openaiIntent === "conversation-panel" || initiator === "user") {
     return "github-copilot";
   }
-
-  // Claude Code / Claude CLI
-  if (ua.includes("claude-cli") || ua.includes("claude-code") || xApp === "cli") return "claude";
 
   // Gemini CLI
   if (ua.includes("gemini-cli")) return "gemini-cli";
