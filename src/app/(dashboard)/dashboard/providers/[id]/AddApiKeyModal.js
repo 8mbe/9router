@@ -5,6 +5,7 @@ import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
+import { validateBulkEntry, usesClaudeCodeModelCheck } from "@/shared/utils/bulkValidation";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
 
@@ -76,7 +77,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
   const [mode, setMode] = useState("single"); // "single" | "bulk"
   const [bulkText, setBulkText] = useState("");
-  const [bulkResult, setBulkResult] = useState(null); // { success, failed }
+  const [bulkResult, setBulkResult] = useState(null);
 
   const buildProviderSpecificData = () => {
     if (isCustomAnthropic) {
@@ -188,19 +189,34 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       setValidating(true);
       setValidationResult(null);
       setModelResult(null);
-      const isValid = await runKeyCheck();
-      setValidationResult(isValid ? "success" : "failed");
-      setValidating(false);
-
-      // Only worth a completion once the key itself was accepted — otherwise the
-      // model check would just re-report the same 401.
+      let isValid;
       let modelCheck = null;
-      if (isValid) {
+      const credential = {
+        provider,
+        apiKey: formData.apiKey,
+        providerSpecificData: buildProviderSpecificData(),
+        model: formData.defaultModel.trim(),
+      };
+      if (usesClaudeCodeModelCheck(credential)) {
+        setValidating(false);
         setModelChecking(true);
-        modelCheck = await runModelCheck();
+        const result = await validateBulkEntry(credential);
+        isValid = result.keyValid;
+        modelCheck = result.modelResult;
         setModelResult(modelCheck);
         setModelChecking(false);
+      } else {
+        isValid = await runKeyCheck();
+        setValidating(false);
+        // A rejected direct key cannot complete a model request either.
+        if (isValid) {
+          setModelChecking(true);
+          modelCheck = await runModelCheck();
+          setModelResult(modelCheck);
+          setModelChecking(false);
+        }
       }
+      setValidationResult(isValid ? "success" : "failed");
 
       // A model the user named that does not answer is not a working connection, so
       // it stays "unknown" until a later test proves otherwise. A provider that
@@ -235,22 +251,23 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     setBulkResult(null);
     let success = 0;
     let failed = 0;
+    let modelsPassed = 0;
+    let modelsFailed = 0;
+    const defaultModel = isCompatible ? formData.defaultModel.trim() : "";
     for (const entry of plan) {
       try {
-        // Validate each key before saving so bulk-added connections get a
-        // real status (active/unknown) like single adds, instead of a
-        // hardcoded "unknown" that never flips until a manual test.
-        let isValid = false;
-        try {
-          const vres = await fetch("/api/providers/validate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ provider, apiKey: entry.apiKey }),
-          });
-          const vdata = await vres.json().catch(() => ({}));
-          isValid = !!vdata.valid;
-        } catch {
-          isValid = false;
+        const providerSpecificData = isCustomAnthropic
+          ? { ...entry.providerSpecificData, executionMode }
+          : entry.providerSpecificData;
+        const validation = await validateBulkEntry({
+          provider,
+          apiKey: entry.apiKey,
+          providerSpecificData,
+          model: defaultModel,
+        });
+        if (validation.modelResult?.supported) {
+          if (validation.modelResult.ok) modelsPassed++;
+          else modelsFailed++;
         }
         const res = await fetch("/api/providers", {
           method: "POST",
@@ -260,10 +277,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             apiKey: entry.apiKey,
             name: entry.name,
             priority: 1,
-            testStatus: isValid ? "active" : "unknown",
-            ...(isCustomAnthropic
-              ? { providerSpecificData: { ...entry.providerSpecificData, executionMode } }
-              : entry.providerSpecificData ? { providerSpecificData: entry.providerSpecificData } : {}),
+            defaultModel: isCompatible ? defaultModel : undefined,
+            testStatus: validation.testStatus,
+            ...(providerSpecificData ? { providerSpecificData } : {}),
           }),
         });
         if (res.ok) success++;
@@ -273,7 +289,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       }
     }
     setSaving(false);
-    setBulkResult({ success, failed });
+    setBulkResult({ success, failed, modelsPassed, modelsFailed });
     if (success > 0 && onBulkDone) onBulkDone();
   };
 
@@ -328,10 +344,26 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               placeholder={bulkPlaceholder}
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
+              disabled={saving}
             />
+            {isCompatible && (
+              <div className="flex flex-col gap-1.5">
+                <Input
+                  label="Default Model (optional)"
+                  value={formData.defaultModel}
+                  onChange={(e) => { setFormData({ ...formData, defaultModel: e.target.value }); setBulkResult(null); }}
+                  placeholder={isAnthropic ? "claude-3-5-sonnet-latest" : "gpt-4o-mini"}
+                  disabled={saving}
+                />
+                <p className="text-xs text-text-muted">Each valid key checks this model before it is saved.</p>
+              </div>
+            )}
             {bulkResult && (
-              <div className={`text-sm font-medium ${bulkResult.failed > 0 ? "text-yellow-400" : "text-green-400"}`}>
+              <div className={`text-sm font-medium ${bulkResult.failed > 0 || bulkResult.modelsFailed > 0 ? "text-yellow-400" : "text-green-400"}`}>
                 ✓ {bulkResult.success} added{bulkResult.failed > 0 ? `, ✗ ${bulkResult.failed} failed` : ""}
+                {(bulkResult.modelsPassed > 0 || bulkResult.modelsFailed > 0) && (
+                  <p className="text-xs">Models: {bulkResult.modelsPassed} passed, {bulkResult.modelsFailed} failed</p>
+                )}
               </div>
             )}
             <div className="flex gap-2">

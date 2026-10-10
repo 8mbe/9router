@@ -9,7 +9,7 @@ import {
 import { PROVIDERS, resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl } from "open-sse/config/providers.js";
 import { probeModelEndpoint } from "@/lib/modelProbe/probe";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
-import { normalizeProviderId } from "@/lib/providerNormalization";
+import { normalizeProviderId, validateConnectionExecutionMode } from "@/lib/providerNormalization";
 
 // /api/providers/validate answers "is this key accepted"; it never touches the model
 // the user typed. This answers the other half: "does that model actually answer on
@@ -65,6 +65,11 @@ export async function POST(request) {
       return NextResponse.json({ error: "Provider and model required" }, { status: 400 });
     }
 
+    const executionModeError = validateConnectionExecutionMode(provider, providerSpecificData);
+    if (executionModeError) {
+      return NextResponse.json({ error: executionModeError }, { status: 400 });
+    }
+
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true || PROVIDERS[provider]?.noAuth === true;
     if (!apiKey && provider !== "ollama-local" && !isNoAuth) {
       return NextResponse.json({ error: "API key required" }, { status: 400 });
@@ -83,10 +88,14 @@ export async function POST(request) {
     const proxy = await resolveConnectionProxyConfig(providerSpecificData || {});
     const result = await probeModelEndpoint({
       ...target,
+      provider,
+      // The saved node controls the upstream URL, including for a pre-save Claude
+      // Code test. The form only supplies the credential's execution preferences.
+      providerSpecificData: { ...providerSpecificData, baseUrl: target.baseUrl },
       apiKey,
       model,
       proxy,
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(25000)]),
     });
 
     return NextResponse.json({

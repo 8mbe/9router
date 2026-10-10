@@ -15,6 +15,7 @@ export const CLAUDE_CODE = Object.freeze({
   toolResultTimeoutMs: 15 * 60 * 1000,
   hookTimeoutSeconds: 16 * 60,
   maxSessions: 64,
+  modelProbeConcurrency: 4,
   maxToolResultBytes: 8 * 1024 * 1024,
   maxHistoryBytes: 16 * 1024 * 1024,
   maxResponseBytes: 16 * 1024 * 1024,

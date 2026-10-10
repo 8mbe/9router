@@ -1,5 +1,6 @@
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
 import { extractContextLength } from "./contextLength";
 
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -156,6 +157,8 @@ export async function probeModelEndpoint({
   apiKey = "",
   model,
   format = "openai",
+  provider,
+  providerSpecificData,
   headers: extraHeaders,
   authHeader,
   proxy,
@@ -170,7 +173,13 @@ export async function probeModelEndpoint({
 
   try {
     let res;
-    if (isAnthropic) {
+    if (isAnthropic && isAnthropicCompatibleProvider(provider) && providerSpecificData?.executionMode === CLAUDE_CODE.executionMode) {
+      const { probeClaudeCodeModel } = await import("./claudeCode");
+      res = await probeClaudeCodeModel({
+        baseUrl, apiKey, model, authMode: providerSpecificData.authMode || "api-key",
+        proxy, signal, maxTokens: PROBE_MAX_TOKENS,
+      });
+    } else if (isAnthropic) {
       res = await probeFetch(url, {
         method: "POST",
         headers: {
@@ -226,7 +235,7 @@ export async function probeModelEndpoint({
     return {
       ok: false,
       error: aborted ? `Timed out after ${DEFAULT_TIMEOUT_MS}ms` : describeFetchError(error),
-      status: null,
+      status: error?.statusCode ?? null,
       latencyMs,
     };
   }
@@ -256,6 +265,8 @@ export async function probeConnectionModel(connection, modelId, options = {}) {
     apiKey: connection.apiKey || connection.accessToken || "",
     model: modelId,
     format: isAnthropicCompatibleProvider(connection.provider) ? "claude" : "openai",
+    provider: connection.provider,
+    providerSpecificData: connection.providerSpecificData,
     proxy: effectiveProxy,
     signal: options.signal,
   });

@@ -20,6 +20,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
+import { probeConnectionModel } from "@/lib/modelProbe/probe";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -864,7 +865,7 @@ case "llm7": {
 /**
  * Test a single connection by ID, update DB, and return result.
  */
-export async function testSingleConnection(id) {
+export async function testSingleConnection(id, { signal } = {}) {
   const connection = await getProviderConnectionById(id);
   if (!connection) return { valid: false, error: "Connection not found", latencyMs: 0, testedAt: new Date().toISOString() };
 
@@ -886,7 +887,14 @@ export async function testSingleConnection(id) {
   const start = Date.now();
   let result;
 
-  if (connection.authType === "apikey" || connection.authType === "cookie") {
+  const compatible = isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider);
+  const configuredModel = typeof connection.defaultModel === "string" ? connection.defaultModel.trim() : "";
+  if (compatible && configuredModel) {
+    // A configured model must answer on this key through its chosen execution
+    // mode. An auth-only check cannot prove model access or Claude Code support.
+    const probe = await probeConnectionModel(connection, configuredModel, { proxy: effectiveProxy, signal });
+    result = { valid: probe.ok, error: probe.ok ? null : probe.error || "Model did not respond", refreshed: false };
+  } else if (connection.authType === "apikey" || connection.authType === "cookie") {
     result = await testApiKeyConnection(connection, effectiveProxy);
   } else {
     result = await testOAuthConnection(connection, effectiveProxy);
