@@ -1,5 +1,10 @@
 import { CLAUDE_CODE } from "../../config/claudeCodeConstants.js";
-import { detectClientTool } from "../../utils/clientDetector.js";
+import { detectClientTool, isClaudeCodeClient } from "../../utils/clientDetector.js";
+
+export function isClaudeCodeRuntimeEnabled(provider, credentials) {
+  return Boolean(provider?.startsWith(CLAUDE_CODE.providerPrefix)
+    && credentials?.providerSpecificData?.executionMode === CLAUDE_CODE.executionMode);
+}
 
 export function isClaudeCodeRuntimeClient({ clientTool, clientMode } = {}) {
   if (clientTool === "claude" || clientMode === CLAUDE_CODE.directMode || clientMode === CLAUDE_CODE.executionMode) return false;
@@ -7,9 +12,9 @@ export function isClaudeCodeRuntimeClient({ clientTool, clientMode } = {}) {
 }
 
 export function shouldUseClaudeCodeRuntime(provider, { credentials, clientTool, clientMode, body } = {}) {
-  if (!provider?.startsWith(CLAUDE_CODE.providerPrefix)) return false;
-  if (credentials?.providerSpecificData?.executionMode !== CLAUDE_CODE.executionMode) return false;
+  if (!isClaudeCodeRuntimeEnabled(provider, credentials)) return false;
   const headers = credentials?.rawHeaders || {};
+  if (isClaudeCodeClient(headers)) return false;
   const tool = detectClientTool(headers, body) || clientTool;
   const mode = clientMode || headers[CLAUDE_CODE.clientModeHeader]?.trim().toLowerCase();
   // A declaration can force direct proxying; it can never override native Claude.

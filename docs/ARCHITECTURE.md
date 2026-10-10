@@ -596,7 +596,7 @@ Environment variables actively used by code:
 
 ## Server Claude Code on custom Anthropic connections
 
-Custom Anthropic connections can opt into `providerSpecificData.executionMode: "claude-code"` using the connection editor. Existing connections default to `"direct"`. Claude Code clients always use HTTP proxying to the configured upstream, even when the server mode is enabled. Unknown clients also stay direct. A custom harness can select the server bridge by sending `x-9router-client-mode: harness` on its `/v1/messages` requests.
+Custom Anthropic connections can opt into `providerSpecificData.executionMode: "claude-code"` using the connection editor. Existing connections default to `"direct"`. With server mode enabled, Claude Code clients forward directly to the configured upstream with their Messages payload preserved. In normal mode, requests use the existing provider normalization, tool handling and token savers. Unknown clients also stay direct. A custom harness can select the server bridge by sending `x-9router-client-mode: harness` on its `/v1/messages` requests.
 
 The bridge uses the pinned Claude Agent SDK and its packaged native runtime. It exposes only client tools through MCP. It returns a normal Anthropic assistant message with `stop_reason: "tool_use"`, retains the worker, and accepts the client's real `tool_result` blocks on the next request. The client executes the tools. Return the complete conversation and the `x-9router-session-id` response header on subsequent requests. Tool IDs also allow continuation discovery when the session header is unavailable.
 

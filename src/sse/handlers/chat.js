@@ -21,7 +21,7 @@ import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActi
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
-import { detectClientTool } from "open-sse/utils/clientDetector.js";
+import { detectClientTool, isClaudeCodeClient } from "open-sse/utils/clientDetector.js";
 import { getClaudeCodeContinuation } from "open-sse/shared/claudeCode/sessions.js";
 import { getApiKeyByKey } from "@/lib/db/repos/apiKeysRepo.js";
 import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
@@ -51,7 +51,7 @@ async function getRuntimeRequestContext(request, body, apiKey) {
     }
     const headers = request?.headers ? Object.fromEntries(request.headers.entries()) : {};
     // Client declarations select a route; they never authenticate a session owner.
-    const runtimeClientTool = detectClientTool(headers, body);
+    const runtimeClientTool = isClaudeCodeClient(headers) ? "claude" : detectClientTool(headers, body);
     const clientMode = runtimeClientTool === "claude" ? CLAUDE_CODE.executionMode : declaredMode;
     const presentedKey = extractClientApiKey(request) || apiKey;
     const keyRecord = presentedKey ? await getApiKeyByKey(presentedKey) : null;

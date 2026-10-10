@@ -19,7 +19,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
-import { detectClientTool, isNativePassthrough } from "../utils/clientDetector.js";
+import { detectClientTool, isNativePassthrough, isClaudeCodeClient } from "../utils/clientDetector.js";
 import { dedupeTools } from "../utils/toolDeduper.js";
 import { takeRenamedToolNames } from "../utils/opencodeFingerprint.js";
 import { injectCaveman } from "../rtk/caveman.js";
@@ -32,7 +32,7 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
-import { shouldUseClaudeCodeRuntime } from "../shared/claudeCode/policy.js";
+import { shouldUseClaudeCodeRuntime, isClaudeCodeRuntimeEnabled } from "../shared/claudeCode/policy.js";
 import { CLAUDE_CODE } from "../config/claudeCodeConstants.js";
 
 const STREAM_DEFAULT_OFF_FORMATS = new Set([FORMATS.OPENAI, FORMATS.OPENAI_RESPONSES, FORMATS.CLAUDE]);
@@ -78,7 +78,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const reqTag = log?.tagForSession ? log.tagForSession(sessionSeed) : (log?.nextTag ? log.nextTag() : "");
 
   const sourceFormat = sourceFormatOverride || detectFormat(body);
-  const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);
+  const rawHeaders = clientRawRequest?.headers || credentials?.rawHeaders || {};
+  const serverClaudeCodeEnabled = isClaudeCodeRuntimeEnabled(provider, credentials);
+  const clientTool = serverClaudeCodeEnabled && isClaudeCodeClient(rawHeaders)
+    ? "claude"
+    : detectClientTool(rawHeaders, body);
   if (credentials) {
     credentials.rawHeaders = clientRawRequest?.headers || credentials.rawHeaders || {};
     credentials.runtimeOwnerId = runtimeOwnerId || credentials.runtimeOwnerId;
@@ -92,7 +96,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   if (runtimeBridge && sourceFormat !== FORMATS.CLAUDE) {
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, "Server Claude Code currently supports /v1/messages only", undefined, { "x-should-retry": "false" });
   }
-  const preserveClaudeWire = sourceFormat === FORMATS.CLAUDE && provider.startsWith(CLAUDE_CODE.providerPrefix) &&
+  const preserveClaudeWire = serverClaudeCodeEnabled && sourceFormat === FORMATS.CLAUDE &&
     (runtimeBridge || clientTool === "claude" || credentials?.clientMode === CLAUDE_CODE.directMode || credentials?.clientMode === CLAUDE_CODE.executionMode);
 
   // Check for bypass patterns (warmup, skip, cc naming)

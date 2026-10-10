@@ -11,6 +11,13 @@ const NATIVE_PAIRS = {
   "codex": ["codex"],
 };
 
+/** Strict identity check for the opt-in server runtime's no-nesting guard. */
+export function isClaudeCodeClient(headers = {}) {
+  const ua = (headers["user-agent"] || "").toLowerCase();
+  const xApp = (headers["x-app"] || "").toLowerCase();
+  return ua.includes("claude-cli") || ua.includes("claude-code") || xApp === "cli";
+}
+
 /**
  * Detect which CLI tool is making the request.
  * Returns one of: "claude" | "gemini-cli" | "antigravity" | "codex" | null
@@ -19,14 +26,9 @@ const NATIVE_PAIRS = {
  */
 export function detectClientTool(headers = {}, body = {}) {
   const ua = (headers["user-agent"] || "").toLowerCase();
-  const xApp = (headers["x-app"] || "").toLowerCase();
   const openaiIntent = (headers["openai-intent"] || "").toLowerCase();
   const initiator = (headers["x-initiator"] || headers["X-Initiator"] || "").toLowerCase();
   const originator = (headers["originator"] || "").toLowerCase();
-
-  // An explicit Claude Code identity takes precedence over generic extension
-  // headers such as x-initiator:user. Never nest a second Claude Code runtime.
-  if (ua.includes("claude-cli") || ua.includes("claude-code") || xApp === "cli") return "claude";
 
   // Antigravity: detected via body field (not header)
   if (body.userAgent === "antigravity") return "antigravity";
@@ -35,6 +37,9 @@ export function detectClientTool(headers = {}, body = {}) {
   if (ua.includes("githubcopilotchat") || openaiIntent === "conversation-panel" || initiator === "user") {
     return "github-copilot";
   }
+
+  // Preserve the existing detection order for normal provider requests.
+  if (isClaudeCodeClient(headers)) return "claude";
 
   // Gemini CLI
   if (ua.includes("gemini-cli")) return "gemini-cli";
