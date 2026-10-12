@@ -3,7 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { getStatusVariant as getConnectionStatusVariant } from "@/shared/utils/connectionStatus";
 import PropTypes from "prop-types";
-import { Card, Badge, Button, Modal, Select, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
+import { Card, Badge, Button, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
+import { AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import AddApiKeyModal from "../[id]/AddApiKeyModal";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -193,106 +195,6 @@ ConnectionRow.propTypes = {
   onDelete: PropTypes.func.isRequired,
 };
 
-// ── AddApiKeyModal ─────────────────────────────────────────────
-function AddApiKeyModal({ isOpen, provider, providerName, proxyPools, onSave, onClose }) {
-  const NONE = "__none__";
-  const [formData, setFormData] = useState({ name: "", apiKey: "", priority: 1, proxyPoolId: NONE });
-  const [validating, setValidating] = useState(false);
-  const [validationResult, setValidationResult] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  const handleValidate = async () => {
-    setValidating(true);
-    try {
-      const res = await fetch("/api/providers/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, apiKey: formData.apiKey }),
-      });
-      const data = await res.json();
-      setValidationResult(data.valid ? "success" : "failed");
-    } catch { setValidationResult("failed"); }
-    finally { setValidating(false); }
-  };
-
-  const handleSubmit = async () => {
-    if (!provider || !formData.apiKey) return;
-    setSaving(true);
-    try {
-      let isValid = false;
-      try {
-        setValidating(true); setValidationResult(null);
-        const res = await fetch("/api/providers/validate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider, apiKey: formData.apiKey }),
-        });
-        const data = await res.json();
-        isValid = !!data.valid;
-        setValidationResult(isValid ? "success" : "failed");
-      } catch { setValidationResult("failed"); }
-      finally { setValidating(false); }
-      await onSave({
-        name: formData.name,
-        apiKey: formData.apiKey,
-        priority: formData.priority,
-        proxyPoolId: formData.proxyPoolId === NONE ? null : formData.proxyPoolId,
-        testStatus: isValid ? "active" : "unknown",
-      });
-    } finally { setSaving(false); }
-  };
-
-  if (!provider) return null;
-
-  return (
-    <Modal isOpen={isOpen} title={`Add ${providerName || provider} API Key`} onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <div>
-          <label className="text-xs text-text-muted mb-1 block">Name</label>
-          <input className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Production Key" />
-        </div>
-        <div className="flex gap-2">
-          <div className="flex-1">
-            <label className="text-xs text-text-muted mb-1 block">API Key</label>
-            <input type="password" className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.apiKey} onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })} />
-          </div>
-          <div className="pt-6">
-            <Button onClick={handleValidate} disabled={!formData.apiKey || validating || saving} variant="secondary">
-              {validating ? "Checking..." : "Check"}
-            </Button>
-          </div>
-        </div>
-        {validationResult && (
-          <Badge variant={validationResult === "success" ? "success" : "error"}>
-            {validationResult === "success" ? "Valid" : "Invalid"}
-          </Badge>
-        )}
-        <div>
-          <label className="text-xs text-text-muted mb-1 block">Priority</label>
-          <input type="number" className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary" value={formData.priority} onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })} />
-        </div>
-        <Select label="Proxy Pool" value={formData.proxyPoolId} onChange={(e) => setFormData({ ...formData, proxyPoolId: e.target.value })}
-          options={[{ value: NONE, label: "None" }, ...(proxyPools || []).map((p) => ({ value: p.id, label: p.name }))]} />
-        <div className="flex gap-2">
-          <Button onClick={handleSubmit} fullWidth disabled={!formData.name || !formData.apiKey || saving}>
-            {saving ? "Saving..." : "Save"}
-          </Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-AddApiKeyModal.propTypes = {
-  isOpen: PropTypes.bool.isRequired,
-  provider: PropTypes.string,
-  providerName: PropTypes.string,
-  proxyPools: PropTypes.array,
-  onSave: PropTypes.func.isRequired,
-  onClose: PropTypes.func.isRequired,
-};
-
 // ── ConnectionsCard ────────────────────────────────────────────
 // Self-contained card: fetches, displays and manages all connections for a provider.
 export default function ConnectionsCard({ providerId, isOAuth }) {
@@ -300,11 +202,21 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
   const [proxyPools, setProxyPools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [addMode, setAddMode] = useState("single");
+  const [addError, setAddError] = useState("");
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [providerStrategy, setProviderStrategy] = useState(null);
   const [providerStickyLimit, setProviderStickyLimit] = useState("1");
   const [confirmState, setConfirmState] = useState(null);
+  const providerInfo = AI_PROVIDERS[providerId];
+  const canBulkAdd = providerInfo?.credentialForm !== "aws" && !providerInfo?.noAuth && (!isOAuth || providerInfo?.authModes?.includes("apikey"));
+
+  const openAddModal = (mode) => {
+    setAddMode(mode);
+    setAddError("");
+    setShowAddModal(true);
+  };
 
   const fetch_ = useCallback(async () => {
     try {
@@ -383,10 +295,15 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
   };
 
   const handleSaveApiKey = async (formData) => {
+    setAddError("");
     try {
       const res = await fetch("/api/providers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: providerId, ...formData }) });
       if (res.ok) { await fetch_(); setShowAddModal(false); }
-    } catch (e) { console.log("save apikey error:", e); }
+      else {
+        const data = await res.json().catch(() => ({}));
+        setAddError(data.error || "Could not save the connection.");
+      }
+    } catch { setAddError("Could not save the connection. Try again."); }
   };
 
   const handleUpdateConnection = async (formData) => {
@@ -430,7 +347,10 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
         {connections.length === 0 ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-text-muted">No connections yet</p>
-            <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add Connection</Button>
+            <div className="flex flex-wrap gap-2">
+              {canBulkAdd && <Button size="sm" icon="playlist_add" variant="secondary" className="min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("bulk")}>Bulk Add</Button>}
+              <Button size="sm" icon="add" className="min-h-11 bg-brand-700 hover:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("single")}>Add Connection</Button>
+            </div>
           </div>
         ) : (
           <>
@@ -452,18 +372,27 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
                 />
               ))}
             </div>
-            <div className="mt-4 flex justify-stretch sm:justify-start">
-              <Button size="sm" icon="add" onClick={() => setShowAddModal(true)}>Add</Button>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button size="sm" icon="add" className="min-h-11 bg-brand-700 hover:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("single")}>Add</Button>
+              {canBulkAdd && <Button size="sm" icon="playlist_add" variant="secondary" className="min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("bulk")}>Bulk Add</Button>}
             </div>
           </>
         )}
       </Card>
 
       <AddApiKeyModal
+        key={`${providerId}-${showAddModal}-${addMode}`}
         isOpen={showAddModal}
+        initialMode={addMode}
         provider={providerId}
+        providerName={providerInfo?.name}
+        isCompatible={isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId)}
+        isAnthropic={isAnthropicCompatibleProvider(providerId)}
         proxyPools={proxyPools}
+        error={addError}
+        existingNames={connections.map((connection) => connection.name).filter(Boolean)}
         onSave={handleSaveApiKey}
+        onBulkDone={fetch_}
         onClose={() => setShowAddModal(false)}
       />
       <EditConnectionModal

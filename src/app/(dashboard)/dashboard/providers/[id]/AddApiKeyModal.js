@@ -6,10 +6,11 @@ import { Button, Badge, Input, Modal, Select } from "@/shared/components";
 import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
 import { validateBulkEntry, usesClaudeCodeModelCheck } from "@/shared/utils/bulkValidation";
+import { importBulkApiKeys } from "@/shared/utils/bulkImport";
 
 const BULK_PLACEHOLDER = `name1|sk-key1\nname2|sk-key2\nsk-key-only-auto-named`;
 
-export default function AddApiKeyModal({ isOpen, provider, providerName, isCompatible, isAnthropic, authType, authHint, website, proxyPools, error, existingNames, onSave, onBulkDone, onClose }) {
+export default function AddApiKeyModal({ isOpen, initialMode = "single", provider, providerName, isCompatible, isAnthropic, authType, authHint, website, proxyPools, error, existingNames, onSave, onBulkDone, onClose }) {
   const NONE_PROXY_POOL_VALUE = "__none__";
   const isOllamaLocal = provider === "ollama-local";
   const isCookie = authType === "cookie";
@@ -75,9 +76,14 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       ? `name1|pt-xxxxx\nname2|pt-yyyyy\npt-only-auto-named`
       : BULK_PLACEHOLDER;
 
-  const [mode, setMode] = useState("single"); // "single" | "bulk"
+  const [mode, setMode] = useState(usesAwsCredentialForm ? "single" : initialMode);
   const [bulkText, setBulkText] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
+  const [bulkError, setBulkError] = useState("");
+  const [bulkProgress, setBulkProgress] = useState(null);
+  const [importedNames, setImportedNames] = useState([]);
+  const bulkInputId = useId();
+  const handleClose = () => { if (!saving) onClose(); };
 
   const buildProviderSpecificData = () => {
     if (isCustomAnthropic) {
@@ -240,70 +246,53 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   };
 
   const handleBulkSubmit = async () => {
-    const lines = bulkText.split("\n");
-    if (!lines.length) return;
+    if (saving) return;
+    const lines = bulkText.split("\n").filter((line) => planBulkAdd([line], [], { isCloudflareAi }).length > 0);
     // Plan collision-free names against existing connections so a generated
     // "Key N" never matches a saved name (which the backend would upsert /
     // overwrite instead of inserting). See bulkAdd.js for the full rationale.
-    const plan = planBulkAdd(lines, existingNames, { isCloudflareAi });
-    if (!plan.length) return;
+    const plan = planBulkAdd(lines, [...(existingNames || []), ...importedNames], { isCloudflareAi });
+    if (!plan.length) {
+      setBulkError("Enter at least one API key. Use one key per line, or name|apiKey.");
+      return;
+    }
     setSaving(true);
     setBulkResult(null);
-    let success = 0;
-    let failed = 0;
-    let modelsPassed = 0;
-    let modelsFailed = 0;
-    const defaultModel = isCompatible ? formData.defaultModel.trim() : "";
-    for (const entry of plan) {
-      try {
-        const providerSpecificData = isCustomAnthropic
-          ? { ...entry.providerSpecificData, executionMode }
-          : entry.providerSpecificData;
-        const validation = await validateBulkEntry({
-          provider,
-          apiKey: entry.apiKey,
-          providerSpecificData,
-          model: defaultModel,
-        });
-        if (validation.modelResult?.supported) {
-          if (validation.modelResult.ok) modelsPassed++;
-          else modelsFailed++;
-        }
-        const res = await fetch("/api/providers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider,
-            apiKey: entry.apiKey,
-            name: entry.name,
-            priority: 1,
-            defaultModel: isCompatible ? defaultModel : undefined,
-            testStatus: validation.testStatus,
-            ...(providerSpecificData ? { providerSpecificData } : {}),
-          }),
-        });
-        if (res.ok) success++;
-        else failed++;
-      } catch {
-        failed++;
-      }
+    setBulkError("");
+    setBulkProgress({ completed: 0, total: plan.length });
+    try {
+      const result = await importBulkApiKeys({
+        provider, entries: plan,
+        providerSpecificData: buildProviderSpecificData(),
+        defaultModel: isCompatible ? formData.defaultModel.trim() : undefined,
+        priority: formData.priority,
+        proxyPoolId: formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? null : formData.proxyPoolId,
+        onProgress: setBulkProgress,
+      });
+      setBulkResult(result);
+      // Preserve successful names even if refreshing the connection list fails.
+      const failedIndexes = new Set(result.failedIndexes);
+      setImportedNames((names) => [...names, ...plan.filter((_, index) => !failedIndexes.has(index)).map((entry) => entry.name)]);
+      // Keep only failed lines so retrying cannot re-add successful keys.
+      setBulkText(result.failedIndexes.map((index) => lines[index]).join("\n"));
+      if (result.success > 0 && onBulkDone) await onBulkDone();
+    } finally {
+      setSaving(false);
+      setBulkProgress(null);
     }
-    setSaving(false);
-    setBulkResult({ success, failed, modelsPassed, modelsFailed });
-    if (success > 0 && onBulkDone) onBulkDone();
   };
 
   if (!provider) return null;
 
   return (
-    <Modal isOpen={isOpen} title={`Add ${providerName || provider} ${credentialLabel}`} onClose={onClose}>
-      <div className="flex flex-col gap-4">
+    <Modal isOpen={isOpen} title={`Add ${providerName || provider} ${credentialLabel}`} onClose={handleClose}>
+      <div className="flex flex-col gap-4" aria-busy={saving}>
         {/* Mode switcher. Hidden for AWS credentials: bulk lines carry only a key, so a
             Bedrock entry would be saved with no access key id or profile and never work. */}
         {!usesAwsCredentialForm && (
           <div className="flex gap-2">
-            <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
-            <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
+            <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} className={`min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main ${mode === "single" ? "bg-brand-700 hover:bg-brand-800" : ""}`} disabled={saving} aria-pressed={mode === "single"} onClick={() => { setMode("single"); setBulkResult(null); setBulkError(""); }}>Single</Button>
+            <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} className={`min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main ${mode === "bulk" ? "bg-brand-700 hover:bg-brand-800" : ""}`} disabled={saving} aria-pressed={mode === "bulk"} onClick={() => { setMode("bulk"); setBulkResult(null); setBulkError(""); }}>Bulk Add</Button>
           </div>
         )}
 
@@ -331,7 +320,8 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
         {mode === "bulk" && (
           <div className="flex flex-col gap-3">
-            <p className="text-xs text-text-muted">
+            <label htmlFor={bulkInputId} className="text-sm font-medium text-text-main">API keys</label>
+            <p id={`${bulkInputId}-hint`} className="text-xs text-text-muted">
               {isCloudflareAi
                 ? <>One key per line. Format: <code>name|apiKey|accountId</code> or just <code>apiKey</code> (auto-named by index).</>
                 : provider === "qoder" || provider === "qoder-cn"
@@ -340,10 +330,15 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               }
             </p>
             <textarea
-              className="w-full rounded border border-accent/30 bg-sidebar p-2 text-sm font-mono resize-y min-h-[140px] focus:outline-none focus:ring-1 focus:ring-primary"
+              id={bulkInputId}
+              aria-describedby={`${bulkInputId}-hint`}
+              aria-invalid={!!bulkError}
+              autoComplete="off"
+              spellCheck={false}
+              className="w-full rounded border border-text-muted bg-surface-2 p-2 text-[16px] sm:text-sm text-text-main font-mono resize-y min-h-[140px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main"
               placeholder={bulkPlaceholder}
               value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
+              onChange={(e) => { setBulkText(e.target.value); setBulkError(""); }}
               disabled={saving}
             />
             {isCompatible && (
@@ -359,18 +354,20 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               </div>
             )}
             {bulkResult && (
-              <div className={`text-sm font-medium ${bulkResult.failed > 0 || bulkResult.modelsFailed > 0 ? "text-yellow-400" : "text-green-400"}`}>
-                ✓ {bulkResult.success} added{bulkResult.failed > 0 ? `, ✗ ${bulkResult.failed} failed` : ""}
+              <div role="status" className="text-sm text-text-main">
+                {bulkResult.success} added{bulkResult.failed > 0 ? `, ${bulkResult.failed} failed. Retry the remaining keys.` : "."}
                 {(bulkResult.modelsPassed > 0 || bulkResult.modelsFailed > 0) && (
                   <p className="text-xs">Models: {bulkResult.modelsPassed} passed, {bulkResult.modelsFailed} failed</p>
                 )}
               </div>
             )}
+            {bulkError && <p role="alert" className="text-sm text-text-main">{bulkError}</p>}
+            {bulkProgress && <p role="status" className="text-sm text-text-main">Adding {bulkProgress.completed} of {bulkProgress.total} keys...</p>}
             <div className="flex gap-2">
-              <Button onClick={handleBulkSubmit} fullWidth disabled={saving || !bulkText.trim()}>
+              <Button onClick={handleBulkSubmit} fullWidth className="min-h-11 bg-brand-700 hover:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" disabled={saving || !bulkText.trim()}>
                 {saving ? "Adding..." : "Add All Keys"}
               </Button>
-              <Button onClick={onClose} variant="ghost" fullWidth>Cancel</Button>
+              <Button onClick={handleClose} variant="ghost" fullWidth className="min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" disabled={saving}>Cancel</Button>
             </div>
           </div>
         )}
@@ -619,7 +616,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
           <Button onClick={handleSubmit} fullWidth disabled={saving || (!isOllamaLocal && (!formData.name || !apiKeySatisfied())) || (isAzure && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization)) || (isCloudflareAi && !cloudflareData.accountId)}>
             {saving ? "Saving..." : "Save"}
           </Button>
-          <Button onClick={onClose} variant="ghost" fullWidth>
+          <Button onClick={handleClose} variant="ghost" fullWidth disabled={saving}>
             Cancel
           </Button>
         </div>
@@ -631,6 +628,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
 
 AddApiKeyModal.propTypes = {
   isOpen: PropTypes.bool.isRequired,
+  initialMode: PropTypes.oneOf(["single", "bulk"]),
   provider: PropTypes.string,
   providerName: PropTypes.string,
   isCompatible: PropTypes.bool,
