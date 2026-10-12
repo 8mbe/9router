@@ -166,7 +166,9 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
 
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
 
-    if (shouldFallback) {
+    // An async Treg submission may still complete after a timeout or upstream
+    // error. Rotate only when submission was refused before a job was created.
+    if (shouldFallback && (provider !== "treg" || [HTTP_STATUS.UNAUTHORIZED, HTTP_STATUS.FORBIDDEN, HTTP_STATUS.RATE_LIMITED].includes(result.status))) {
       excludeConnectionIds.add(credentials.connectionId);
       lastError = result.error;
       lastStatus = result.status;

@@ -7,6 +7,7 @@ import openai from "./openai.js";
 import openrouter from "./openrouter.js";
 import gemini, { fetchGeminiVoices } from "./gemini.js";
 import xiaomiMimo from "./xiaomi-mimo.js";
+import treg from "./treg.js";
 import selfhostedTts from "./selfhostedTts.js";
 import openaiCompatNode from "./openaiCompatNode.js";
 import { FORMAT_HANDLERS } from "./genericFormats.js";
@@ -22,6 +23,7 @@ const SPECIAL_ADAPTERS = {
   openrouter,
   gemini,
   "xiaomi-mimo": xiaomiMimo,
+  treg,
   "selfhosted-tts": selfhostedTts,
 };
 

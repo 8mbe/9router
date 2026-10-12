@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 import { pingModelByKind } from "./ping";
 import { isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 
-async function probeCustomAnthropicModel(model, signal) {
+async function probeDirectModel(model, kind, signal) {
+  if (kind !== "llm" && !String(model).startsWith("treg/")) return null;
   const { getModelInfo } = await import("@/sse/services/model");
   const resolved = await getModelInfo(model);
-  if (!isAnthropicCompatibleProvider(resolved.provider)) return null;
+  if (resolved.provider !== "treg" && !(kind === "llm" && isAnthropicCompatibleProvider(resolved.provider))) return null;
 
   const start = Date.now();
   const { getProviderCredentials } = await import("@/sse/services/auth");
@@ -30,7 +31,7 @@ async function probeCustomAnthropicModel(model, signal) {
   // Probe the chosen key directly so its Claude Code preference is honored and
   // a failure cannot be hidden by the completion endpoint's account fallback.
   const { probeConnectionModel } = await import("@/lib/modelProbe/probe");
-  return probeConnectionModel(connection, resolved.model, { signal });
+  return probeConnectionModel(connection, resolved.model, resolved.provider === "treg" ? { kind, signal } : { signal });
 }
 
 // POST /api/models/test - Ping a single model using its configured execution mode.
@@ -39,7 +40,7 @@ export async function POST(request) {
     const { model, kind } = await request.json();
     if (!model) return NextResponse.json({ error: "Model required" }, { status: 400 });
     const modelKind = kind || "llm";
-    const probe = modelKind === "llm" ? await probeCustomAnthropicModel(model, request.signal) : null;
+    const probe = await probeDirectModel(model, modelKind, request.signal);
     const result = probe || await pingModelByKind(model, modelKind);
     return NextResponse.json(result);
   } catch (err) {

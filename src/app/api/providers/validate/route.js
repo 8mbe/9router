@@ -7,6 +7,8 @@ import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-t
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
+import { TREG_CONFIG } from "open-sse/config/treg.js";
+import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -243,6 +245,22 @@ export async function POST(request) {
       // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
       if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
         return NextResponse.json(await probeBedrockCredentials({ apiKey, providerSpecificData }, fetch));
+      }
+
+      // Treg serves several media and web kinds; validate without submitting paid work.
+      if (provider === "treg") {
+        const res = await fetch(TREG_CONFIG.validateUrl, {
+          method: "GET",
+          redirect: "error",
+          headers: buildTregHeaders({ apiKey, providerSpecificData }, { Accept: "application/json" }),
+          signal: AbortSignal.timeout(8000),
+        });
+        return NextResponse.json({
+          valid: res.ok,
+          error: res.ok ? null : (res.status === 401 || res.status === 403
+            ? "Invalid Treg API token"
+            : `Treg authentication returned HTTP ${res.status}`),
+        });
       }
 
       // Generic probe for webSearch/webFetch providers (config-driven)

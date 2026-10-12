@@ -30,6 +30,7 @@
  */
 
 import { assertPublicUrl } from "../../../src/shared/utils/ssrfGuard.js";
+import { buildTregHeaders } from "../treg/client.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -397,6 +398,33 @@ function buildTinyfishRequest(config, params) {
   };
 }
 
+function buildTregRequest(config, params) {
+  if (params.searchType && params.searchType !== "web") {
+    throw new Error("Treg routed search supports only the web search type");
+  }
+  const unsupported = [];
+  if (params.country) unsupported.push("country");
+  if (params.language) unsupported.push("language");
+  if (params.timeRange && params.timeRange !== "any") unsupported.push("time_range");
+  if (params.offset) unsupported.push("offset");
+  if (params.domainFilter?.length) unsupported.push("domain_filter");
+  if (params.contentOptions?.full_page) unsupported.push("content_options.full_page");
+  if (unsupported.length) {
+    throw new Error(`Treg routed search does not support: ${unsupported.join(", ")}`);
+  }
+  return {
+    url: config.baseUrl,
+    init: {
+      method: "POST",
+      headers: {
+        ...buildTregHeaders({ apiKey: params.token, providerSpecificData: params.providerSpecificData }),
+        "X-Treg-Route-Strict-Filters": "1",
+      },
+      body: JSON.stringify({ q: params.query, limit: params.maxResults }),
+    },
+  };
+}
+
 // ── Ollama Cloud web_search ──────────────────────────────────────────────
 // POST https://ollama.com/api/web_search { query, max_results }
 // Response: { results: [{ title, url, content, published_at? }] }
@@ -460,6 +488,7 @@ const BUILDERS = {
   "searxng": buildSearxngRequest,
   "xquik": buildXquikRequest,
   "tinyfish": buildTinyfishRequest,
+  "treg": buildTregRequest,
   "ollama-search": buildOllamaSearchRequest,
   "glm": buildGlmSearchRequest,
 };

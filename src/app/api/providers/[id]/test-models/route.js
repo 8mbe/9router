@@ -32,8 +32,8 @@ export async function POST(request, { params }) {
       && connection.providerSpecificData?.executionMode === CLAUDE_CODE.executionMode;
     const testModel = (model) => {
       const kind = model.kind || model.type || "llm";
-      return isAnthropicCompatible && kind === "llm"
-        ? probeConnectionModel(connection, model.id, { signal: request.signal })
+      return providerId === "treg" || (isAnthropicCompatible && kind === "llm")
+        ? probeConnectionModel(connection, model.id, providerId === "treg" ? { kind, signal: request.signal } : { signal: request.signal })
         : pingModelByKind(`${alias}/${model.id}`, kind, baseUrl);
     };
 

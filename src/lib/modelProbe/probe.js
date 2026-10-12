@@ -1,6 +1,8 @@
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
+import { TREG_CONFIG, TREG_ROUTES, TREG_CATALOG_PLATFORMS } from "open-sse/config/treg.js";
+import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
 import { extractContextLength } from "./contextLength";
 
 const DEFAULT_TIMEOUT_MS = 20000;
@@ -144,6 +146,51 @@ function completionUrl(baseUrl, format) {
   return `${base}/chat/completions`;
 }
 
+async function probeTregModel(connection, modelId, options = {}) {
+  const start = Date.now();
+  const result = (ok, error, status, note = null) => ({
+    ok, error, status, note, latencyMs: Date.now() - start,
+  });
+  const route = Object.hasOwn(TREG_ROUTES, modelId) ? TREG_ROUTES[modelId] : null;
+  if (!route) return result(false, `Unsupported Treg model: ${modelId}`, 400);
+  if (options.kind && options.kind !== route.kind) {
+    return result(false, `Treg model '${modelId}' does not support ${options.kind}`, 400);
+  }
+
+  try {
+    const headers = buildTregHeaders(connection);
+    const effectiveProxy = options.proxy !== undefined
+      ? options.proxy
+      : await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+    const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    const auth = await probeFetch(TREG_CONFIG.validateUrl, {
+      method: "GET", headers, signal, redirect: "error",
+    }, effectiveProxy);
+    if (!auth.ok) {
+      return result(false, auth.status === 401 || auth.status === 403
+        ? "Invalid Treg API token"
+        : `Treg authentication returned HTTP ${auth.status}`, auth.status);
+    }
+    await auth.body?.cancel?.();
+
+    // Catalog metadata is public; keep credentials on the identity request only.
+    const catalog = await probeFetch(`${TREG_CONFIG.baseUrl}/catalog/endpoints/${encodeURIComponent(modelId)}`, {
+      method: "GET", headers: { Accept: "application/json" }, signal, redirect: "error",
+    }, effectiveProxy);
+    if (!catalog.ok) return result(false, `Treg catalog returned HTTP ${catalog.status}`, catalog.status);
+    const metadata = await catalog.json().catch(() => null);
+    const endpoint = metadata?.endpoint;
+    if (endpoint?.id !== modelId || endpoint.platform !== TREG_CATALOG_PLATFORMS[route.kind]) {
+      return result(false, `Treg catalog does not confirm the ${route.kind} endpoint '${modelId}'`, 502);
+    }
+    return result(true, null, catalog.status, "Token and catalog endpoint verified; generation was not run");
+  } catch (error) {
+    const aborted = error?.name === "AbortError" || error?.name === "TimeoutError";
+    return result(false, aborted ? `Timed out after ${DEFAULT_TIMEOUT_MS}ms` : describeFetchError(error), error?.statusCode ?? null);
+  }
+}
+
 /**
  * Send one real completion to `model` at an explicit endpoint.
  *
@@ -163,7 +210,11 @@ export async function probeModelEndpoint({
   authHeader,
   proxy,
   signal,
+  kind,
 }) {
+  if (provider === "treg") {
+    return probeTregModel({ provider, apiKey, providerSpecificData }, model, { proxy, signal, kind });
+  }
   const start = Date.now();
   if (!baseUrl) return { ok: false, error: "No base URL", latencyMs: 0, status: null };
   if (!model) return { ok: false, error: "No model id", latencyMs: 0, status: null };
@@ -251,6 +302,7 @@ export async function probeModelEndpoint({
  * connection's base URL with that connection's key.
  */
 export async function probeConnectionModel(connection, modelId, options = {}) {
+  if (connection?.provider === "treg") return probeTregModel(connection, modelId, options);
   const baseUrl = connection?.providerSpecificData?.baseUrl;
   if (!baseUrl) {
     return { ok: false, error: "Connection has no base URL", latencyMs: 0, status: null };

@@ -21,6 +21,8 @@ import {
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
 import { probeConnectionModel } from "@/lib/modelProbe/probe";
+import { TREG_CONFIG } from "open-sse/config/treg.js";
+import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -536,6 +538,19 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
 
   try {
     switch (connection.provider) {
+      case "treg": {
+        const res = await fetchWithConnectionProxy(TREG_CONFIG.validateUrl, {
+          method: "GET",
+          redirect: "error",
+          headers: buildTregHeaders(connection, { Accept: "application/json" }),
+        }, effectiveProxy);
+        return {
+          valid: res.ok,
+          error: res.ok ? null : (res.status === 401 || res.status === 403
+            ? "Invalid Treg API token"
+            : `Treg authentication returned HTTP ${res.status}`),
+        };
+      }
       case "cloudflare-ai": {
         const psd = connection.providerSpecificData || {};
         const accountId = psd.accountId;

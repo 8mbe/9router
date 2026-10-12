@@ -128,6 +128,7 @@ export async function handleVideoProxyCore({
         headers: plan.headers,
         body: plan.body,
         signal: fetchSignal,
+        ...(adapter?.fetchOptions || {}),
       }),
     };
   };
@@ -187,6 +188,14 @@ export async function handleVideoProxyCore({
   // unless the adapter maps a provider-native shape onto it (Vertex operations).
   let outBody = bodyText;
   let outType = upstream.headers.get("content-type") || "application/json";
+  if (adapter?.parseResponse) {
+    try {
+      outBody = JSON.stringify(await adapter.parseResponse(JSON.parse(bodyText), { requestId, rawBody, credentials, signal: fetchSignal }));
+      outType = "application/json";
+    } catch (error) {
+      return createErrorResult(error.status || HTTP_STATUS.BAD_GATEWAY, sanitizeSecrets(`[${provider}] ${error.message}`, credentials));
+    }
+  }
   if (adapter?.transformResponse) {
     try {
       outBody = JSON.stringify(adapter.transformResponse(JSON.parse(bodyText)));
@@ -203,6 +212,7 @@ export async function handleVideoProxyCore({
       headers: {
         "Content-Type": outType,
         "Access-Control-Allow-Origin": "*",
+        ...(adapter?.responseHeaders?.(upstream) || {}),
       },
     }),
   };

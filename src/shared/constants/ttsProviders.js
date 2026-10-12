@@ -54,6 +54,14 @@ export const TTS_PROVIDER_CONFIG = {
     hasBrowseButton: false,
     voiceSource: "manual", // model and voice depend on the connected server
   },
+  "treg": {
+    hasLanguageDropdown: false,
+    hasModelSelector: true,
+    hasBrowseButton: false,
+    hasVoiceIdInput: true,
+    voiceSource: "config",
+    modelKey: "treg",
+  },
   // ── Config-driven providers (load models from providers.js → ttsConfig.models) ──
   "nvidia": {
     hasModelSelector: true,

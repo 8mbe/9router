@@ -11,6 +11,12 @@ function serializeRequestBody(requestBody) {
   return JSON.stringify(requestBody);
 }
 
+function submissionErrorResult(adapter, status, message) {
+  const result = createErrorResult(status, message);
+  if (adapter.noRetryAfterSubmission) result.response.headers.set("x-should-retry", "false");
+  return result;
+}
+
 /**
  * Core image generation handler — orchestrator only.
  * Provider-specific URL/headers/body/parse/normalize live in `./imageProviders/{id}.js`.
@@ -113,11 +119,13 @@ export async function handleImageGenerationCore({
       method: "POST",
       headers,
       body: serializeRequestBody(requestBody),
+      ...(adapter.fetchOptions?.() || {}),
     });
   } catch (error) {
-    const errMsg = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
+    const message = formatProviderError(error, provider, model, HTTP_STATUS.BAD_GATEWAY);
+    const errMsg = adapter.sanitizeError?.(message, credentials) || message;
     log?.debug?.("IMAGE", `Fetch error: ${errMsg}`);
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, errMsg);
+    return submissionErrorResult(adapter, HTTP_STATUS.BAD_GATEWAY, errMsg);
   }
 
   // Handle 401/403 — try token refresh (skipped for noAuth providers)
@@ -147,6 +155,7 @@ export async function handleImageGenerationCore({
           method: "POST",
           headers: retryHeaders,
           body: serializeRequestBody(retryBody),
+          ...(adapter.fetchOptions?.() || {}),
         });
       } catch {
         log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`);
@@ -158,9 +167,10 @@ export async function handleImageGenerationCore({
 
   if (!providerResponse.ok) {
     const { statusCode, message } = await parseUpstreamError(providerResponse);
-    const errMsg = formatProviderError(new Error(message), provider, model, statusCode);
+    const providerMessage = formatProviderError(new Error(message), provider, model, statusCode);
+    const errMsg = adapter.sanitizeError?.(providerMessage, credentials) || providerMessage;
     log?.debug?.("IMAGE", `Provider error: ${errMsg}`);
-    return createErrorResult(statusCode, errMsg);
+    return statusCode >= 500 ? submissionErrorResult(adapter, statusCode, errMsg) : createErrorResult(statusCode, errMsg);
   }
 
   // Parse provider response — adapter may override (codex SSE / async polling / binary)
@@ -186,7 +196,8 @@ export async function handleImageGenerationCore({
       parsed = await providerResponse.json();
     }
   } catch (parseError) {
-    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, parseError.message || `Invalid response from ${provider}`);
+    const message = parseError.message || `Invalid response from ${provider}`;
+    return submissionErrorResult(adapter, HTTP_STATUS.BAD_GATEWAY, adapter.sanitizeError?.(message, credentials) || message);
   }
 
   if (onRequestSuccess) await onRequestSuccess();
@@ -215,6 +226,7 @@ export async function handleImageGenerationCore({
             "Content-Type": mime,
             "Content-Disposition": `inline; filename="image.${fmt === "jpeg" ? "jpg" : fmt}"`,
             "Access-Control-Allow-Origin": "*",
+            ...(adapter.responseHeaders?.(providerResponse) || {}),
           },
         }),
       };
@@ -227,6 +239,7 @@ export async function handleImageGenerationCore({
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
+        ...(adapter.responseHeaders?.(providerResponse) || {}),
       },
     }),
   };

@@ -13,8 +13,10 @@ import runwayml from "./runwayml.js";
 import cloudflareAi from "./cloudflareAi.js";
 import antigravity from "./antigravity.js";
 import openaiCompatNode from "./openaiCompatNode.js";
+import treg from "./treg.js";
 
 const ADAPTERS = {
+  treg,
   openai: createOpenAIAdapter("openai"),
   minimax: createOpenAIAdapter("minimax"),
   openrouter: createOpenAIAdapter("openrouter"),

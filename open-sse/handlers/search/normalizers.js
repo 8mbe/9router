@@ -120,6 +120,45 @@ function normalizeTinyfish(data) {
   };
 }
 
+function normalizeTreg(data) {
+  const error = data?.detail || data?.error;
+  if (error) {
+    throw new Error(typeof error === "string" ? error : error.message || JSON.stringify(error));
+  }
+  if (data?._treg?.outcome === "pending") {
+    throw new Error("Treg search is still pending");
+  }
+  const output = data?.output ?? data;
+  if (!Array.isArray(output?.results)) {
+    throw new Error("Treg returned an invalid search response: missing output.results");
+  }
+  const firstText = (...values) => values.find((value) => typeof value === "string" && value.length > 0) || "";
+  const now = new Date().toISOString();
+  const results = output.results.map((item, idx) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Treg returned an invalid search result");
+    }
+    const text = firstText(item.markdown, item.text, item.raw_content, item.content?.text);
+    return makeResult("treg", {
+      title: firstText(item.title, item.name, item.metadata?.title),
+      url: firstText(item.url, item.link, item.source_url),
+      snippet: firstText(
+        item.snippet, item.description, item.content,
+        item.snippets?.[0], item.highlights?.[0], item.excerpts?.[0], text.slice(0, 300),
+      ),
+      score: item.score,
+      published_at: firstText(item.published_at, item.published_date, item.publishedDate, item.date, item.page_age),
+      favicon_url: firstText(item.favicon_url, item.favicon),
+      author: firstText(item.author, item.metadata?.author),
+      source_type: firstText(item.source_type, item.source, "web"),
+      image_url: firstText(item.image_url, item.thumbnail_url, item.image),
+      full_text: text,
+      text_format: typeof item.markdown === "string" && item.markdown.length > 0 ? "markdown" : item.content?.format || item.format || "text",
+    }, idx, now);
+  });
+  return { results, totalResults: Number.isFinite(output.count) ? output.count : results.length };
+}
+
 function normalizeGooglePse(data, _query, _searchType) {
   const now = new Date().toISOString();
   const items = Array.isArray(data.items) ? data.items : [];
@@ -308,6 +347,7 @@ const NORMALIZERS = {
   "searxng": normalizeSearxng,
   "xquik": normalizeXquik,
   "tinyfish": normalizeTinyfish,
+  "treg": normalizeTreg,
   "ollama-search": normalizeOllamaSearch,
   "glm": normalizeGlmSearch,
 };
