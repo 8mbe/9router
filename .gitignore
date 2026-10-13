@@ -52,6 +52,7 @@ source/*
 docs/*
 !docs/TREG.md
 !docs/ARCHITECTURE.md
+!docs/custom-api-privacy.md
 test/*
 open-sse/test/*
 RM.vn.md

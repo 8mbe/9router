@@ -23,6 +23,9 @@ import { buildClineHeaders, toClineOAuthToken } from "@/shared/utils/clineAuth";
 import { probeConnectionModel } from "@/lib/modelProbe/probe";
 import { TREG_CONFIG } from "open-sse/config/treg.js";
 import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
+import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
+import { isCustomApiProvider } from "open-sse/utils/customApiPrivacy.js";
+import { FETCH_CONNECT_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -480,12 +483,13 @@ async function fetchWithConnectionProxy(url, options = {}, effectiveProxy = null
 }
 
 async function testApiKeyConnection(connection, effectiveProxy = null) {
-  if (isOpenAICompatibleProvider(connection.provider)) {
+  if (isOpenAICompatibleProvider(connection.provider) || connection.provider?.startsWith("custom-embedding-")) {
     const modelsBase = connection.providerSpecificData?.baseUrl;
     if (!modelsBase) return { valid: false, error: "Missing base URL" };
     try {
-      const res = await fetchWithConnectionProxy(`${modelsBase.replace(/\/$/, "")}/models`, {
+      const res = await fetchCustomApiDiagnostic(connection, `${modelsBase.replace(/\/$/, "")}/models`, {
         headers: { "Authorization": `Bearer ${connection.apiKey}` },
+        signal: AbortSignal.timeout(FETCH_CONNECT_TIMEOUT_MS),
       }, effectiveProxy);
       return { valid: res.ok, error: res.ok ? null : "Invalid API key or base URL" };
     } catch (err) {
@@ -501,8 +505,9 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
       if (modelsBase.endsWith("/messages")) modelsBase = modelsBase.slice(0, -9);
       const messagesUrl = `${modelsBase}/v1/messages`;
       const model = connection.defaultModel || "claude-3-haiku-20240307";
-      const res = await fetchWithConnectionProxy(messagesUrl, {
+      const res = await fetchCustomApiDiagnostic(connection, messagesUrl, {
         method: "POST",
+        signal: AbortSignal.timeout(FETCH_CONNECT_TIMEOUT_MS),
         headers: {
           "x-api-key": connection.apiKey,
           "anthropic-version": "2023-06-01",
@@ -886,7 +891,8 @@ export async function testSingleConnection(id, { signal } = {}) {
 
   const effectiveProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
 
-  if (effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl) {
+  const customSessionPinned = isCustomApiProvider(connection.provider) && connection.providerSpecificData?.customApiSessionPinning === true;
+  if (!customSessionPinned && effectiveProxy.connectionProxyEnabled && effectiveProxy.connectionProxyUrl && !effectiveProxy.vercelRelayUrl) {
     const proxyResult = await testProxyUrl({ proxyUrl: effectiveProxy.connectionProxyUrl });
     if (!proxyResult.ok) {
       const proxyError = proxyResult.error || `Proxy test failed with status ${proxyResult.status}`;

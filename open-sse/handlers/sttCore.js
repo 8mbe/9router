@@ -3,6 +3,17 @@ import { createErrorResult } from "../utils/error.js";
 import { transcribeGeminiLive } from "./geminiLiveStt.js";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
+import { isCustomApiProvider, sanitizeCustomApiRequest } from "../utils/customApiPrivacy.js";
+import { fetchCustomApi } from "../utils/customApiFetch.js";
+
+function fetchStt(cfg, url, options = {}) {
+  const request = sanitizeCustomApiRequest(cfg.requestProvider, cfg.requestCredentials, {
+    url, headers: options.headers, body: options.body,
+  });
+  return fetchCustomApi(cfg.requestProvider, cfg.requestCredentials, request.url, {
+    ...options, headers: request.headers, body: request.body,
+  });
+}
 
 // Build auth headers from sttConfig + token
 function buildAuthHeaders(cfg, token) {
@@ -46,7 +57,7 @@ async function transcribeDeepgram(cfg, file, model, token, formData) {
   else url.searchParams.set("detect_language", "true");
 
   const buf = await file.arrayBuffer();
-  const res = await fetch(url, {
+  const res = await fetchStt(cfg, url, {
     method: "POST",
     headers: { ...buildAuthHeaders(cfg, token), "Content-Type": resolveAudioContentType(file) },
     body: buf,
@@ -61,13 +72,13 @@ async function transcribeDeepgram(cfg, file, model, token, formData) {
 async function transcribeAssemblyAI(cfg, file, model, token) {
   const auth = buildAuthHeaders(cfg, token);
   const buf = await file.arrayBuffer();
-  const up = await fetch("https://api.assemblyai.com/v2/upload", {
+  const up = await fetchStt(cfg, "https://api.assemblyai.com/v2/upload", {
     method: "POST", headers: { ...auth, "Content-Type": "application/octet-stream" }, body: buf,
   });
   if (!up.ok) return upstreamError(up);
   const { upload_url } = await up.json();
 
-  const sub = await fetch(cfg.baseUrl, {
+  const sub = await fetchStt(cfg, cfg.baseUrl, {
     method: "POST",
     headers: { ...auth, "Content-Type": "application/json" },
     body: JSON.stringify({ audio_url: upload_url, speech_models: [model], language_detection: true }),
@@ -78,8 +89,13 @@ async function transcribeAssemblyAI(cfg, file, model, token) {
   const start = Date.now();
   while (Date.now() - start < 120_000) {
     await new Promise((r) => setTimeout(r, 2000));
-    const poll = await fetch(`${cfg.baseUrl}/${id}`, { headers: auth });
-    if (!poll.ok) continue;
+    const poll = await fetchStt(cfg, `${cfg.baseUrl}/${id}`, { headers: auth });
+    if (!poll.ok) {
+      // Poll retries discard this response. Stop its body before sending the
+      // next poll so a custom account's proxy session does not remain leased.
+      try { await poll.body?.cancel?.(); } catch {}
+      continue;
+    }
     const r = await poll.json();
     if (r.status === "completed") return jsonResponse({ text: r.text || "" });
     if (r.status === "error") return createErrorResult(500, r.error || "AssemblyAI failed");
@@ -92,7 +108,7 @@ async function transcribeNvidia(cfg, file, model, token) {
   const fd = new FormData();
   fd.append("file", file, file.name || "audio.wav");
   fd.append("model", model);
-  const res = await fetch(cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
+  const res = await fetchStt(cfg, cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
   if (!res.ok) return upstreamError(res);
   const data = await res.json();
   return jsonResponse({ text: data.text || data.transcript || "" });
@@ -111,7 +127,7 @@ async function transcribeGemini(cfg, file, model, token, formData) {
   if (typeof lang === "string" && lang.trim()) promptText += ` Language: ${lang.trim()}.`;
 
   const url = `${cfg.baseUrl}/${model}:generateContent?key=${token}`;
-  const res = await fetch(url, {
+  const res = await fetchStt(cfg, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -165,7 +181,7 @@ async function transcribeElevenLabs(cfg, file, model, token, formData) {
     fd.append("additional_formats", JSON.stringify([{ format: extraFormat }]));
   }
 
-  const res = await fetch(cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
+  const res = await fetchStt(cfg, cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
   if (!res.ok) return upstreamError(res);
 
   const data = await res.json();
@@ -215,7 +231,7 @@ async function transcribeHuggingFace(cfg, file, model, token) {
   if (model.includes("..") || model.includes("//")) return createErrorResult(400, "Invalid model ID");
   const url = `${cfg.baseUrl.replace(/\/+$/, "")}/${model}`;
   const buf = await file.arrayBuffer();
-  const res = await fetch(url, {
+  const res = await fetchStt(cfg, url, {
     method: "POST",
     headers: { ...buildAuthHeaders(cfg, token), "Content-Type": resolveAudioContentType(file) },
     body: buf,
@@ -234,7 +250,7 @@ async function transcribeOpenAICompatible(cfg, file, model, token, formData) {
     const v = formData.get(k);
     if (v !== null && v !== undefined && v !== "") fd.append(k, v);
   }
-  const res = await fetch(cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
+  const res = await fetchStt(cfg, cfg.baseUrl, { method: "POST", headers: buildAuthHeaders(cfg, token), body: fd });
   if (!res.ok) return upstreamError(res);
   const ct = res.headers.get("content-type") || "application/json";
   const txt = await res.text();
@@ -299,6 +315,11 @@ export async function handleSttCore({ provider, model, formData, credentials, st
   // Format-switch extension: an explicit caller marker wins over the registry
   // marker; with neither, the provider-default sttConfig.format applies.
   const marker = (typeof transport === "string" && transport.trim()) ? transport.trim() : resolveModelTransport(provider, model);
+  cfg = { ...cfg, requestProvider: provider, requestCredentials: credentials };
+  if (isCustomApiProvider(provider) && (marker || cfg.format) === "gemini-live"
+    && (credentials?.providerSpecificData?.anonymizeRequests === true || credentials?.providerSpecificData?.customApiSessionPinning === true)) {
+    return createErrorResult(HTTP_STATUS.BAD_REQUEST, "Custom Gemini Live WebSocket transport does not support request anonymization or proxy session pinning; use the HTTP transcription transport");
+  }
 
   try {
     switch (marker || cfg.format) {

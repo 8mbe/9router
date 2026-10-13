@@ -3,7 +3,8 @@
 import { useState, useId } from "react";
 import PropTypes from "prop-types";
 import { Button, Badge, Input, Modal, Select } from "@/shared/components";
-import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { AI_PROVIDERS, isAnthropicCompatibleProvider, isOpenAICompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
+import CustomApiOptions from "@/shared/components/CustomApiOptions";
 import { planBulkAdd } from "@/shared/utils/bulkAdd";
 import { validateBulkEntry, usesClaudeCodeModelCheck } from "@/shared/utils/bulkValidation";
 import { importBulkApiKeys } from "@/shared/utils/bulkImport";
@@ -23,6 +24,7 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
   const isAzure = provider === "azure";
   const isCloudflareAi = provider === "cloudflare-ai";
   const isCustomAnthropic = isAnthropicCompatibleProvider(provider);
+  const isCustomApi = isCustomAnthropic || isOpenAICompatibleProvider(provider) || isCustomEmbeddingProvider(provider);
   // Capability, not identity: gating this on `provider === "bedrock"` left bedrock-xai with no
   // way to enter a profile at all, which is the same mistake as hardcoding the API-key exemption.
   const usesAwsCredentialForm =
@@ -70,6 +72,20 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
   }
   const executionMode = executionModeState.value;
   const setExecutionMode = (value) => setExecutionModeState({ provider, isOpen, value });
+  const [customApiOptionsState, setCustomApiOptionsState] = useState({ provider, isOpen, value: { anonymizeRequests: false, customApiSessionPinning: false } });
+  if (customApiOptionsState.provider !== provider || customApiOptionsState.isOpen !== isOpen) {
+    setCustomApiOptionsState({ provider, isOpen, value: { anonymizeRequests: false, customApiSessionPinning: false } });
+  }
+  const customApiOptions = customApiOptionsState.value;
+  const requiresDirect = customApiOptions.anonymizeRequests || customApiOptions.customApiSessionPinning;
+  const proxyPoolInputId = useId();
+  const handleCustomApiOptionsChange = (value) => {
+    setCustomApiOptionsState({ provider, isOpen, value });
+    if (value.anonymizeRequests || value.customApiSessionPinning) setExecutionMode("direct");
+    setValidationResult(null);
+    setModelResult(null);
+    setBulkResult(null);
+  };
   const bulkPlaceholder = isCloudflareAi
     ? `name1|sk-key1|acc123456\nname2|sk-key2|def789012\nsk-key-only-auto-named`
     : provider === "qoder" || provider === "qoder-cn"
@@ -86,8 +102,12 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
   const handleClose = () => { if (!saving) onClose(); };
 
   const buildProviderSpecificData = () => {
-    if (isCustomAnthropic) {
-      return { executionMode };
+    if (isCustomApi) {
+      return {
+        ...customApiOptions,
+        ...(isCustomAnthropic ? { executionMode: requiresDirect ? "direct" : executionMode } : {}),
+        ...(formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? {} : { proxyPoolId: formData.proxyPoolId }),
+      };
     }
     if (isOllamaLocal && formData.ollamaHostUrl.trim()) {
       return { baseUrl: formData.ollamaHostUrl.trim() };
@@ -303,19 +323,38 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
                 type="checkbox"
                 checked={executionMode === "claude-code"}
                 onChange={(e) => setExecutionMode(e.target.checked ? "claude-code" : "direct")}
-                disabled={saving}
+                disabled={saving || requiresDirect}
                 aria-describedby={`${executionModeHintId} ${executionModeHintId}-header`}
                 className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               />
               Use server Claude Code
             </label>
             <p id={executionModeHintId} className="text-xs text-text-muted">
-              Other clients use server Claude Code; Claude Code clients connect directly.
+              {requiresDirect ? "Request anonymization and session pinning use direct execution." : "Other clients use server Claude Code; Claude Code clients connect directly."}
             </p>
             <p id={`${executionModeHintId}-header`} className="text-xs text-text-muted break-words">
               Unrecognized clients can opt in with <code>x-9router-client-mode: harness</code>.
             </p>
           </div>
+        )}
+
+        {isCustomApi && (
+          <>
+            <CustomApiOptions value={customApiOptions} onChange={handleCustomApiOptionsChange} disabled={saving} />
+            <Select
+              label="Proxy Pool"
+              id={proxyPoolInputId}
+              aria-label="Proxy Pool"
+              value={formData.proxyPoolId}
+              onChange={(event) => { setFormData({ ...formData, proxyPoolId: event.target.value }); setValidationResult(null); setModelResult(null); setBulkResult(null); }}
+              disabled={saving}
+              options={[
+                { value: NONE_PROXY_POOL_VALUE, label: "None" },
+                ...(proxyPools || []).map((pool) => ({ value: pool.id, label: `${pool.name}${pool.isActive === false ? " (inactive)" : ""}` })),
+              ]}
+              hint={(proxyPools || []).length === 0 ? "Create an active proxy pool in Proxy Pools to use session pinning." : undefined}
+            />
+          </>
         )}
 
         {mode === "bulk" && (
@@ -591,7 +630,7 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
           onChange={(e) => setFormData({ ...formData, priority: Number.parseInt(e.target.value) || 1 })}
         />
 
-        <Select
+        {!isCustomApi && <Select
           label="Proxy Pool"
           value={formData.proxyPoolId}
           onChange={(e) => setFormData({ ...formData, proxyPoolId: e.target.value })}
@@ -600,9 +639,9 @@ export default function AddApiKeyModal({ isOpen, initialMode = "single", provide
             ...(proxyPools || []).map((pool) => ({ value: pool.id, label: pool.name })),
           ]}
           placeholder="None"
-        />
+        />}
 
-        {(proxyPools || []).length === 0 && (
+        {!isCustomApi && (proxyPools || []).length === 0 && (
           <p className="text-xs text-text-muted">
             No active proxy pools available. Create one in Proxy Pools page first.
           </p>

@@ -2,7 +2,10 @@ import { Readable } from "stream";
 import { MEMORY_CONFIG } from "../config/runtimeConfig.js";
 import { dbg } from "./debugLog.js";
 
-const originalFetch = globalThis.fetch;
+// Duplicate server bundles and hot reload can see an earlier proxy wrapper.
+// Unwrap it so an explicit dispatcher is not re-routed through the environment.
+const originalFetchKey = Symbol.for("9router.proxyFetch.originalFetch");
+const originalFetch = globalThis.fetch?.[originalFetchKey] || globalThis.fetch;
 const proxyDispatchers = new Map();
 
 // ─── TLS fingerprinting via got-scraping (browser-like JA3) ───────────────
@@ -416,6 +419,8 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
 async function patchedFetch(url, options = {}) {
   return proxyAwareFetch(url, options, null);
 }
+
+Object.defineProperty(patchedFetch, originalFetchKey, { value: originalFetch });
 
 // Idempotency guard — only patch once to avoid wrapping multiple times
 if (globalThis.fetch !== patchedFetch) {

@@ -1,4 +1,35 @@
-import { AI_PROVIDERS, isAnthropicCompatibleProvider } from "../shared/constants/providers.js";
+import { AI_PROVIDERS, isAnthropicCompatibleProvider, isOpenAICompatibleProvider, isCustomEmbeddingProvider } from "../shared/constants/providers.js";
+import { resolveConnectionProxyConfig } from "./network/connectionProxy.js";
+import { buildCustomApiSessionProxyUrl } from "open-sse/utils/customApiSession.js";
+
+export function isCustomApiProvider(provider) {
+  return isOpenAICompatibleProvider(provider) || isAnthropicCompatibleProvider(provider) || isCustomEmbeddingProvider(provider);
+}
+
+export async function validateCustomApiOptions(provider, providerSpecificData = {}) {
+  const data = providerSpecificData || {};
+  for (const field of ["anonymizeRequests", "customApiSessionPinning"]) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue;
+    if (!isCustomApiProvider(provider)) return "Request anonymization and session pinning are only supported for custom API connections";
+    if (typeof data[field] !== "boolean") return `${field} must be a boolean`;
+  }
+  if (data.executionMode === "claude-code" && (data.anonymizeRequests || data.customApiSessionPinning)) {
+    return "Request anonymization and session pinning require direct execution; disable server Claude Code";
+  }
+  if (data.customApiSessionPinning !== true) return null;
+
+  const proxy = await resolveConnectionProxyConfig(data);
+  if (proxy.vercelRelayUrl) return "Session pinning requires a session-capable HTTP or HTTPS proxy, not a relay";
+  if (!proxy.connectionProxyEnabled || !proxy.connectionProxyUrl) {
+    return "Session pinning requires an active session-capable proxy pool or connection proxy";
+  }
+  try {
+    buildCustomApiSessionProxyUrl(proxy.connectionProxyUrl, "9routervalidation");
+    return null;
+  } catch (error) {
+    return error.message;
+  }
+}
 
 /**
  * Detect xAI Grok models by id pattern (grok-*, Grok_*, etc).

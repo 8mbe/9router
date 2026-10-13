@@ -8,7 +8,7 @@ import {
 } from "@/models";
 import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
-import { normalizeProviderId, normalizeProviderSpecificData, validateConnectionExecutionMode } from "@/lib/providerNormalization";
+import { normalizeProviderId, normalizeProviderSpecificData, validateConnectionExecutionMode, validateCustomApiOptions } from "@/lib/providerNormalization";
 import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
 
 export const dynamic = "force-dynamic";
@@ -140,6 +140,7 @@ export async function POST(request) {
         return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
       }
       providerSpecificData = {
+        ...providerSpecificData,
         prefix: node.prefix,
         apiType: node.apiType,
         mediaKinds: node.mediaKinds || [],
@@ -163,6 +164,7 @@ export async function POST(request) {
         return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
       }
       providerSpecificData = {
+        ...providerSpecificData,
         prefix: node.prefix,
         baseUrl: node.baseUrl,
         nodeName: node.name,
@@ -178,6 +180,11 @@ export async function POST(request) {
 
     if (proxyPoolId !== null) {
       mergedProviderSpecificData.proxyPoolId = proxyPoolId;
+    }
+
+    const customApiOptionsError = await validateCustomApiOptions(provider, mergedProviderSpecificData);
+    if (customApiOptionsError) {
+      return NextResponse.json({ error: customApiOptionsError }, { status: 400 });
     }
 
     const newConnection = await createProviderConnection({

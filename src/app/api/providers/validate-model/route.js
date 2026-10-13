@@ -89,6 +89,7 @@ export async function POST(request) {
     const result = await probeModelEndpoint({
       ...target,
       provider,
+      connectionId: body.connectionId,
       // The saved node controls the upstream URL, including for a pre-save Claude
       // Code test. The form only supplies the credential's execution preferences.
       providerSpecificData: { ...providerSpecificData, baseUrl: target.baseUrl },

@@ -5,6 +5,8 @@ import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
 import { getProbeHints, orderConnectionsByProbe, recordLiveOutcome } from "@/lib/modelProbe/routingHints";
+import { getPinnedCustomApiConnectionId, isCustomApiSessionPinningEnabled, isCustomApiConnectionDraining, markCustomApiSessionDraining, pinCustomApiConnection } from "open-sse/utils/customApiSession.js";
+import { isCustomApiProvider } from "open-sse/utils/customApiPrivacy.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -72,6 +74,13 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     const connections = await getProviderConnections({ provider: providerId, isActive: true });
+    const pinnedConnectionId = getPinnedCustomApiConnectionId(providerId);
+    if (pinnedConnectionId) {
+      const pinned = connections.find(c => c.id === pinnedConnectionId);
+      if (!pinned || !isCustomApiSessionPinningEnabled(providerId, pinned.providerSpecificData)) {
+        markCustomApiSessionDraining(providerId, pinnedConnectionId);
+      }
+    }
     log.debug("AUTH", `${provider} | total connections: ${connections.length}, excludeIds: ${excludeSet.size > 0 ? [...excludeSet].join(",") : "none"}, model: ${model || "any"}`);
 
     if (connections.length === 0) {
@@ -86,6 +95,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
     const availableConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
+      if (isCustomApiConnectionDraining(providerId, c.id)) return false;
       if (isModelLockActive(c, model)) return false;
       const enabled = c.providerSpecificData?.enabledModels;
       if (providerId === "codex" && Array.isArray(enabled) && enabled.length && requestedModel && !enabled.includes(requestedModel)) return false;
@@ -167,6 +177,12 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     let connection;
+    // A proxy session stays on its account even when round-robin or probe
+    // ordering would otherwise move the next request to another key.
+    const activePin = getPinnedCustomApiConnectionId(providerId);
+    if (activePin && !preferredConnectionId) {
+      connection = availableConnections.find(c => c.id === activePin);
+    }
     // Pin to preferred connection if specified and available
     if (preferredConnectionId) {
       connection = availableConnections.find((c) => c.id === preferredConnectionId);
@@ -222,6 +238,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     }
 
     const resolvedProxy = await resolveConnectionProxyConfig(connection.providerSpecificData || {});
+    if (isCustomApiSessionPinningEnabled(providerId, connection.providerSpecificData)) {
+      pinCustomApiConnection(providerId, connection.id);
+    }
 
     return {
       authType: connection.authType,
@@ -242,6 +261,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
         connectionNoProxy: resolvedProxy.connectionNoProxy,
         connectionProxyPoolId: resolvedProxy.proxyPoolId || null,
         vercelRelayUrl: resolvedProxy.vercelRelayUrl || "",
+        strictProxy: resolvedProxy.strictProxy === true,
       },
       connectionId: connection.id,
       // Include current status for optimization check
@@ -292,6 +312,10 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
+  // Stop assigning new requests immediately. The transport keeps the old
+  // session alive until every request using it has finished upstream.
+  markCustomApiSessionDraining(resolveProviderId(provider), connectionId);
+
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
   const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
 
@@ -339,6 +363,12 @@ export async function clearAccountError(connectionId, currentConnection, model =
   // A real success is the strongest evidence this key serves this model, and it is
   // what lets a stale "broken" verdict heal itself without a manual re-test.
   const providerId = provider || conn?.provider;
+  if (isCustomApiProvider(providerId)) {
+    const latest = (await getProviderConnections({ provider: resolveProviderId(providerId) })).find(c => c.id === connectionId);
+    // A stream selected before a later quota failure must not clear that new
+    // cooldown when it finishes. A request selected after the failure may heal it.
+    if (latest?.lastErrorAt && latest.lastErrorAt !== conn?.lastErrorAt) return;
+  }
   if (model && providerId) {
     recordLiveOutcome({ connectionId, providerId: resolveProviderId(providerId), modelId: model, ok: true })
       .catch(() => {});

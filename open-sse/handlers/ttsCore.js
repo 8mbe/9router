@@ -57,7 +57,7 @@ export async function handleTtsCore({ provider, model, input, credentials, respo
     // Special-case adapters (google-tts, edge-tts, local-device, elevenlabs, openai, openrouter, gemini, xiaomi-mimo)
     const adapter = getTtsAdapter(provider);
     if (adapter) {
-      const result = await adapter.synthesize(input.trim(), model, credentials, responseFormat, { language, style, voice });
+      const result = await adapter.synthesize(input.trim(), model, credentials, responseFormat, { language, style, voice, provider });
       // Adapter may return a full {success, response} (legacy) or {base64, format}
       if (result.success !== undefined) return result;
       return createTtsResponse(result.base64, result.format, responseFormat);

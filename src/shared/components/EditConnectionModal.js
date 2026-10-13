@@ -6,14 +6,17 @@ import Modal from "@/shared/components/Modal";
 import Input from "@/shared/components/Input";
 import Button from "@/shared/components/Button";
 import Badge from "@/shared/components/Badge";
-import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import Select from "@/shared/components/Select";
+import CustomApiOptions from "@/shared/components/CustomApiOptions";
 
 export default function EditConnectionModal({ isOpen, connection, proxyPools, onSave, onClose }) {
+  const NONE_PROXY_POOL_VALUE = "__none__";
   const [formData, setFormData] = useState({
     name: "",
     priority: 1,
     apiKey: "",
+    proxyPoolId: NONE_PROXY_POOL_VALUE,
   });
   const [azureData, setAzureData] = useState({
     azureEndpoint: "",
@@ -31,6 +34,8 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
   const [executionMode, setExecutionMode] = useState("direct");
+  const [customApiOptions, setCustomApiOptions] = useState({ anonymizeRequests: false, customApiSessionPinning: false });
+  const [saveError, setSaveError] = useState("");
   const executionModeHintId = useId();
 
   useEffect(() => {
@@ -39,8 +44,14 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         name: connection.name || "",
         priority: connection.priority || 1,
         apiKey: "",
+        proxyPoolId: connection.providerSpecificData?.proxyPoolId || NONE_PROXY_POOL_VALUE,
       });
       setExecutionMode(connection.providerSpecificData?.executionMode === "claude-code" ? "claude-code" : "direct");
+      setCustomApiOptions({
+        anonymizeRequests: connection.providerSpecificData?.anonymizeRequests === true,
+        customApiSessionPinning: connection.providerSpecificData?.customApiSessionPinning === true,
+      });
+      setSaveError("");
       // Load Azure-specific data if present
       if (connection.provider === "azure" && connection.providerSpecificData) {
         setAzureData({
@@ -82,7 +93,25 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const isCompatible = connection
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
     : false;
+  const isCustomApi = isCompatible || isCustomEmbeddingProvider(connection?.provider);
+  const requiresDirect = customApiOptions.anonymizeRequests || customApiOptions.customApiSessionPinning;
+  const proxyPoolInputId = useId();
   const providerRegions = connection ? (AI_PROVIDERS?.[connection.provider]?.regions || null) : null;
+
+  const buildCustomSpecificData = () => {
+    const data = { ...connection?.providerSpecificData, ...customApiOptions };
+    if (isCustomAnthropic) data.executionMode = requiresDirect ? "direct" : executionMode;
+    if (formData.proxyPoolId === NONE_PROXY_POOL_VALUE) delete data.proxyPoolId;
+    else data.proxyPoolId = formData.proxyPoolId;
+    return data;
+  };
+
+  const handleCustomApiOptionsChange = (value) => {
+    setCustomApiOptions(value);
+    if (value.anonymizeRequests || value.customApiSessionPinning) setExecutionMode("direct");
+    setValidationResult(null);
+    setSaveError("");
+  };
 
   // Build providerSpecificData for region-aware providers
   const buildRegionSpecificData = () => {
@@ -125,11 +154,12 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         body: JSON.stringify({
           provider: connection.provider,
           apiKey: formData.apiKey,
+          connectionId: connection.id,
           ...(isAzure ? { providerSpecificData: azureData } : {}),
           ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
           ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
           ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
-          ...(isCustomAnthropic ? { providerSpecificData: { ...connection.providerSpecificData, executionMode } } : {}),
+          ...(isCustomApi ? { providerSpecificData: buildCustomSpecificData() } : {}),
         }),
       });
       const data = await res.json();
@@ -144,6 +174,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const handleSubmit = async () => {
     if (!connection) return;
     setSaving(true);
+    setSaveError("");
     try {
       const updates = {
         name: formData.name,
@@ -162,11 +193,12 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
               body: JSON.stringify({
                 provider: connection.provider,
                 apiKey: formData.apiKey,
+                connectionId: connection.id,
                 ...(isAzure ? { providerSpecificData: azureData } : {}),
                 ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
                 ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
                 ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
-                ...(isCustomAnthropic ? { providerSpecificData: { ...connection.providerSpecificData, executionMode } } : {}),
+                ...(isCustomApi ? { providerSpecificData: buildCustomSpecificData() } : {}),
               }),
             });
             const data = await res.json();
@@ -204,11 +236,17 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       if (providerRegions && region) {
         updates.providerSpecificData = buildRegionSpecificData();
       }
-      if (isCustomAnthropic) {
-        updates.providerSpecificData = { executionMode };
+      if (isCustomApi) {
+        updates.providerSpecificData = {
+          ...customApiOptions,
+          ...(isCustomAnthropic ? { executionMode: requiresDirect ? "direct" : executionMode } : {}),
+        };
+        updates.proxyPoolId = formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? null : formData.proxyPoolId;
       }
       
       await onSave(updates);
+    } catch (error) {
+      setSaveError(error.message || "Failed to save connection");
     } finally {
       setSaving(false);
     }
@@ -271,19 +309,39 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 type="checkbox"
                 checked={executionMode === "claude-code"}
                 onChange={(e) => setExecutionMode(e.target.checked ? "claude-code" : "direct")}
-                disabled={saving}
+                disabled={saving || requiresDirect}
                 aria-describedby={`${executionModeHintId} ${executionModeHintId}-header`}
                 className="size-4 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
               />
               Use server Claude Code
             </label>
             <p id={executionModeHintId} className="text-xs text-text-muted">
-              Other clients use server Claude Code; Claude Code clients connect directly.
+              {requiresDirect ? "Request anonymization and session pinning use direct execution." : "Other clients use server Claude Code; Claude Code clients connect directly."}
             </p>
             <p id={`${executionModeHintId}-header`} className="text-xs text-text-muted break-words">
               Unrecognized clients can opt in with <code>x-9router-client-mode: harness</code>.
             </p>
           </div>
+        )}
+
+        {isCustomApi && (
+          <>
+            <CustomApiOptions value={customApiOptions} onChange={handleCustomApiOptionsChange} disabled={saving} />
+            <Select
+              label="Proxy Pool"
+              id={proxyPoolInputId}
+              aria-label="Proxy Pool"
+              value={formData.proxyPoolId}
+              onChange={(event) => { setFormData({ ...formData, proxyPoolId: event.target.value }); setValidationResult(null); setSaveError(""); }}
+              disabled={saving}
+              options={[
+                { value: NONE_PROXY_POOL_VALUE, label: connection.providerSpecificData?.connectionProxyEnabled ? "None (use saved connection proxy)" : "None" },
+                ...((proxyPools || []).some((pool) => pool.id === formData.proxyPoolId) || formData.proxyPoolId === NONE_PROXY_POOL_VALUE ? [] : [{ value: formData.proxyPoolId, label: "Saved proxy pool (unavailable)" }]),
+                ...(proxyPools || []).map((pool) => ({ value: pool.id, label: `${pool.name}${pool.isActive === false ? " (inactive)" : ""}` })),
+              ]}
+              hint={(proxyPools || []).length === 0 ? "Create an active proxy pool in Proxy Pools to use session pinning." : undefined}
+            />
+          </>
         )}
 
         {isAzure && (
@@ -390,6 +448,8 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
             )}
           </div>
         )}
+
+        {saveError && <p role="alert" className="text-sm text-red-700 dark:text-red-400 break-words">{saveError}</p>}
 
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={saving}>{saving ? "Saving..." : "Save"}</Button>

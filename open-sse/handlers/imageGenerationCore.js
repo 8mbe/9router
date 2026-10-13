@@ -1,9 +1,11 @@
 import { createErrorResult, parseUpstreamError, formatProviderError } from "../utils/error.js";
-import { HTTP_STATUS } from "../config/runtimeConfig.js";
+import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { getExecutor } from "../executors/index.js";
 import { getImageAdapter } from "./imageProviders/index.js";
 import { urlToBase64 } from "./imageProviders/_base.js";
+import { isCustomApiProvider, sanitizeCustomApiRequest } from "../utils/customApiPrivacy.js";
+import { fetchCustomApi } from "../utils/customApiFetch.js";
 
 function serializeRequestBody(requestBody) {
   if (typeof FormData !== "undefined" && requestBody instanceof FormData) return requestBody;
@@ -45,6 +47,11 @@ export async function handleImageGenerationCore({
   onUsage,
 }) {
   const { provider, model } = modelInfo;
+  // Returned image URLs may point at a separate CDN. Keep custom downloads on
+  // the same proxy/session without sending the API's credentials to that URL.
+  const fetchImage = isCustomApiProvider(provider)
+    ? (url) => fetchCustomApi(provider, credentials, url, { signal: AbortSignal.timeout(FETCH_CONNECT_TIMEOUT_MS) })
+    : undefined;
 
   if (!body.prompt) {
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, "Missing required field: prompt");
@@ -71,7 +78,7 @@ export async function handleImageGenerationCore({
         const first = finalBody.data?.[0];
         let b64 = first?.b64_json;
         if (!b64 && first?.url) {
-          try { b64 = await urlToBase64(first.url); } catch {}
+          try { b64 = await urlToBase64(first.url, fetchImage); } catch {}
         }
         if (b64) {
           const buf = Buffer.from(b64, "base64");
@@ -107,6 +114,9 @@ export async function handleImageGenerationCore({
     url = adapter.buildUrl(model, credentials);
     requestBody = await adapter.buildBody(model, body);
     headers = adapter.buildHeaders(credentials, requestBody, model, body);
+    ({ url, headers, body: requestBody } = sanitizeCustomApiRequest(provider, credentials, {
+      url, headers, body: requestBody,
+    }));
   } catch (error) {
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, error.message || `Invalid ${provider} image request`);
   }
@@ -115,7 +125,7 @@ export async function handleImageGenerationCore({
 
   let providerResponse;
   try {
-    providerResponse = await fetch(url, {
+    providerResponse = await fetchCustomApi(provider, credentials, url, {
       method: "POST",
       headers,
       body: serializeRequestBody(requestBody),
@@ -148,10 +158,14 @@ export async function handleImageGenerationCore({
       if (onCredentialsRefreshed) await onCredentialsRefreshed(newCredentials);
 
       try {
-        const retryBody = await adapter.buildBody(model, body);
-        const retryHeaders = adapter.buildHeaders(credentials, retryBody, model, body);
-        const retryUrl = adapter.buildUrl(model, credentials);
-        providerResponse = await fetch(retryUrl, {
+        try { await providerResponse.body?.cancel?.(); } catch {}
+        let retryBody = await adapter.buildBody(model, body);
+        let retryHeaders = adapter.buildHeaders(credentials, retryBody, model, body);
+        let retryUrl = adapter.buildUrl(model, credentials);
+        ({ url: retryUrl, headers: retryHeaders, body: retryBody } = sanitizeCustomApiRequest(provider, credentials, {
+          url: retryUrl, headers: retryHeaders, body: retryBody,
+        }));
+        providerResponse = await fetchCustomApi(provider, credentials, retryUrl, {
           method: "POST",
           headers: retryHeaders,
           body: serializeRequestBody(retryBody),
@@ -213,7 +227,7 @@ export async function handleImageGenerationCore({
     const first = finalBody.data?.[0];
     let b64 = first?.b64_json;
     if (!b64 && first?.url) {
-      try { b64 = await urlToBase64(first.url); } catch {}
+      try { b64 = await urlToBase64(first.url, fetchImage); } catch {}
     }
     if (b64) {
       const buf = Buffer.from(b64, "base64");

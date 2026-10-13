@@ -3,6 +3,8 @@ import { HTTP_STATUS, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.j
 import { getExecutor } from "../executors/index.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
 import { getEmbeddingAdapter } from "./embeddingProviders/index.js";
+import { sanitizeCustomApiRequest } from "../utils/customApiPrivacy.js";
+import { fetchCustomApi } from "../utils/customApiFetch.js";
 
 /**
  * Core embeddings handler — orchestrator only. Provider-specific URL/headers/body/normalize
@@ -52,6 +54,9 @@ export async function handleEmbeddingsCore({
       encoding_format: body.encoding_format || "float",
       dimensions: body.dimensions,
     });
+    ({ url, headers, body: requestBody } = sanitizeCustomApiRequest(provider, credentials, {
+      url, headers, body: requestBody,
+    }));
   } catch (error) {
     log?.debug?.("EMBEDDINGS", `Request build failed: ${error.message}`);
     return createErrorResult(HTTP_STATUS.BAD_REQUEST, `[${provider}/${model}] ${error.message}`);
@@ -61,7 +66,7 @@ export async function handleEmbeddingsCore({
 
   let providerResponse;
   try {
-    providerResponse = await fetch(url, {
+    providerResponse = await fetchCustomApi(provider, credentials, url, {
       method: "POST",
       headers,
       body: JSON.stringify(requestBody),
@@ -94,9 +99,13 @@ export async function handleEmbeddingsCore({
       if (onCredentialsRefreshed) await onCredentialsRefreshed(newCredentials);
 
       try {
-        const retryHeaders = adapter.buildHeaders(credentials, ctx);
-        const retryUrl = adapter.buildUrl(model, credentials, ctx);
-        providerResponse = await fetch(retryUrl, {
+        try { await providerResponse.body?.cancel?.(); } catch {}
+        let retryHeaders = adapter.buildHeaders(credentials, ctx);
+        let retryUrl = adapter.buildUrl(model, credentials, ctx);
+        ({ url: retryUrl, headers: retryHeaders } = sanitizeCustomApiRequest(provider, credentials, {
+          url: retryUrl, headers: retryHeaders, body: requestBody,
+        }));
+        providerResponse = await fetchCustomApi(provider, credentials, retryUrl, {
           method: "POST",
           headers: retryHeaders,
           body: JSON.stringify(requestBody),

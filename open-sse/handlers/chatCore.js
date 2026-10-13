@@ -5,6 +5,7 @@ import { FORMATS } from "../translator/formats.js";
 import { normalizeClaudePassthrough, anchorClaudeCache } from "../translator/formats/claude.js";
 import { createStreamController } from "../utils/streamHandler.js";
 import { refreshWithRetry } from "../services/tokenRefresh.js";
+import { isCustomApiSessionPinningEnabled } from "../utils/customApiSession.js";
 import { createRequestLogger } from "../utils/requestLogger.js";
 import { getModelTargetFormat, getModelSupportedFormats, getModelStrip, getModelUpstreamId, getModelType, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.js";
 import { PROVIDERS } from "../config/providers.js";
@@ -498,9 +499,14 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             providerOverrides,
           });
           if (retryResult.response.ok) {
+            if (isCustomApiSessionPinningEnabled(provider, credentials?.providerSpecificData)) {
+              await providerResponse.body?.cancel().catch(() => {});
+            }
             providerResponse = retryResult.response;
             providerUrl = retryResult.url;
             providerResponseFormat = retryResult.responseFormat || targetFormat;
+          } else if (isCustomApiSessionPinningEnabled(provider, credentials?.providerSpecificData)) {
+            await retryResult.response.body?.cancel().catch(() => {});
           }
         } catch { log?.warn?.("TOKEN", `${provider.toUpperCase()} | retry after refresh failed`); }
       } else {

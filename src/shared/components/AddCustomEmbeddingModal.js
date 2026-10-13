@@ -73,6 +73,7 @@ export default function AddCustomEmbeddingModal({ isOpen, onClose, onCreated, on
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(isEdit ? { provider: node.id } : {}),
           baseUrl: formData.baseUrl,
           apiKey: checkKey,
           type: "custom-embedding",

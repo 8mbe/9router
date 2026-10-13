@@ -9,6 +9,7 @@ import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import { normalizeProviderId } from "@/lib/providerNormalization";
 import { TREG_CONFIG } from "open-sse/config/treg.js";
 import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
+import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
 
 // Probe a webSearch/webFetch provider using its searchConfig/fetchConfig.
 // Returns true if API key is accepted (status !== 401 && !== 403).
@@ -90,6 +91,7 @@ export async function POST(request) {
     const body = await request.json();
     const provider = normalizeProviderId(body.provider);
     const { apiKey, providerSpecificData } = body;
+    const customConnection = { provider, apiKey, connectionId: body.connectionId, providerSpecificData };
 
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
     // Same exemption as the create route: a provider can name a providerSpecificData field
@@ -111,8 +113,9 @@ export async function POST(request) {
           return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
         }
         const modelsUrl = `${node.baseUrl?.replace(/\/$/, "")}/models`;
-        const res = await fetch(modelsUrl, {
+        const res = await fetchCustomApiDiagnostic(customConnection, modelsUrl, {
           headers: { "Authorization": `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15000),
         });
         isValid = res.ok;
         return NextResponse.json({
@@ -128,8 +131,9 @@ export async function POST(request) {
           return NextResponse.json({ error: "Custom Embedding node not found" }, { status: 404 });
         }
         const baseUrl = node.baseUrl?.replace(/\/$/, "");
-        const modelsRes = await fetch(`${baseUrl}/models`, {
+        const modelsRes = await fetchCustomApiDiagnostic(customConnection, `${baseUrl}/models`, {
           headers: { "Authorization": `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15000),
         });
         if (modelsRes.ok) {
           return NextResponse.json({ valid: true });
@@ -139,10 +143,11 @@ export async function POST(request) {
           return NextResponse.json({ valid: false, error: "Invalid API key" });
         }
         // Fallback: probe /embeddings with a common test model — many providers lack /models
-        const embedRes = await fetch(`${baseUrl}/embeddings`, {
+        const embedRes = await fetchCustomApiDiagnostic(customConnection, `${baseUrl}/embeddings`, {
           method: "POST",
           headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model: "test", input: "ping" }),
+          signal: AbortSignal.timeout(15000),
         });
         // 401/403 = bad key; anything else (including 400 "model not found") means key works
         isValid = embedRes.status !== 401 && embedRes.status !== 403;
@@ -166,7 +171,7 @@ export async function POST(request) {
         const messagesUrl = `${normalizedBase}/v1/messages`;
         const model = node.defaultModel || "claude-3-haiku-20240307";
 
-        const res = await fetch(messagesUrl, {
+        const res = await fetchCustomApiDiagnostic(customConnection, messagesUrl, {
           method: "POST",
           headers: {
             "x-api-key": apiKey,
@@ -179,6 +184,7 @@ export async function POST(request) {
             max_tokens: 1,
             messages: [{ role: "user", content: "test" }],
           }),
+          signal: AbortSignal.timeout(15000),
         });
 
         // 400/529 still confirms key accepted; only 401/403 = bad key

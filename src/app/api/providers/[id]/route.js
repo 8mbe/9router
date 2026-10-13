@@ -7,7 +7,7 @@ import {
   deleteProviderConnection,
 } from "@/models";
 import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
-import { normalizeProviderSpecificData, validateConnectionExecutionMode } from "@/lib/providerNormalization";
+import { normalizeProviderSpecificData, validateConnectionExecutionMode, validateCustomApiOptions } from "@/lib/providerNormalization";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -164,6 +164,11 @@ export async function PUT(request, { params }) {
           updateData.providerSpecificData.proxyPoolId = proxyPoolResult.proxyPoolId;
         }
       }
+    }
+
+    const customApiOptionsError = await validateCustomApiOptions(existing.provider, updateData.providerSpecificData || existing.providerSpecificData);
+    if (customApiOptionsError) {
+      return NextResponse.json({ error: customApiOptionsError }, { status: 400 });
     }
 
     const updated = await updateProviderConnection(id, updateData);

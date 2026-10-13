@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { assertPublicUrl } from "@/shared/utils/ssrfGuard.js";
 import { isLocalRequest } from "@/dashboardGuard";
+import { getProviderNodeById, getProviderConnections } from "@/models";
+import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
+import { isCustomApiProvider } from "open-sse/utils/customApiPrivacy.js";
 
-// Fetch with timeout wrapper
-const fetchWithTimeout = (url, options, timeout = 10000) => {
-  return Promise.race([
-    fetch(url, options),
-    new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("Request timeout")), timeout)
-    )
-  ]);
+const fetchWithTimeout = (url, options = {}, connection = null, requestSignal = null, timeout = 10000) => {
+  const signal = AbortSignal.any([AbortSignal.timeout(timeout), options.signal, requestSignal].filter(Boolean));
+  const requestOptions = { ...options, signal };
+  return connection
+    ? fetchCustomApiDiagnostic(connection, url, requestOptions)
+    : fetch(url, requestOptions);
 };
 
 // Validate URL format
@@ -75,13 +76,23 @@ export async function POST(request) {
       }
     }
 
+    // Editing a saved node with one of its saved keys must use that account's
+    // privacy settings and proxy, including when checking a draft base URL.
+    let connection = null;
+    const provider = body.provider || body.id;
+    if (isCustomApiProvider(provider) && await getProviderNodeById(provider)) {
+      const connections = await getProviderConnections({ provider });
+      connection = connections.find((candidate) => candidate.provider === provider && candidate.apiKey === apiKey) || null;
+    }
+    const fetchNode = (url, options) => fetchWithTimeout(url, options, connection, request.signal);
+
     // Custom Embedding Validation - test POST /embeddings directly
     if (type === "custom-embedding") {
       const normalizedBase = baseUrl.trim().replace(/\/$/, "");
       if (!modelId?.trim()) {
         return NextResponse.json({ valid: false, error: "Model ID required for embedding validation" });
       }
-      const embedRes = await fetchWithTimeout(`${normalizedBase}/embeddings`, {
+      const embedRes = await fetchNode(`${normalizedBase}/embeddings`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
@@ -113,7 +124,7 @@ export async function POST(request) {
       }
 
       const modelsUrl = `${normalizedBase}/models`;
-      const res = await fetchWithTimeout(modelsUrl, {
+      const res = await fetchNode(modelsUrl, {
         method: "GET",
         headers: {
           "x-api-key": apiKey,
@@ -131,7 +142,7 @@ export async function POST(request) {
 
       // Fallback: try chat/completions if modelId provided
       if (modelId) {
-        const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+        const chatRes = await fetchNode(`${normalizedBase}/chat/completions`, {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${apiKey}`,
@@ -160,7 +171,7 @@ export async function POST(request) {
 
     // OpenAI Compatible Validation (Default)
     const modelsUrl = `${baseUrl.replace(/\/$/, "")}/models`;
-    const res = await fetchWithTimeout(modelsUrl, {
+    const res = await fetchNode(modelsUrl, {
       headers: { "Authorization": `Bearer ${apiKey}` },
     });
 
@@ -173,7 +184,7 @@ export async function POST(request) {
 
     // Fallback: try chat/completions if modelId provided
     if (modelId) {
-      const chatRes = await fetchWithTimeout(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      const chatRes = await fetchNode(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
@@ -199,8 +210,6 @@ export async function POST(request) {
   } catch (error) {
     const errorMessage = getErrorMessage(error);
     console.error("Error validating provider node:", {
-      message: error.message,
-      cause: error.cause,
       code: error.cause?.code,
       userMessage: errorMessage
     });

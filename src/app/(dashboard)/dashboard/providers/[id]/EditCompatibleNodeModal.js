@@ -76,6 +76,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          provider: node.id,
           baseUrl: formData.baseUrl,
           apiKey: checkKey,
           type: isAnthropic ? "anthropic-compatible" : "openai-compatible",

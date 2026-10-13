@@ -1,4 +1,6 @@
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
+import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
+import { isCustomApiProvider } from "open-sse/utils/customApiPrivacy.js";
 import { isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
 import { TREG_CONFIG, TREG_ROUTES, TREG_CATALOG_PLATFORMS } from "open-sse/config/treg.js";
@@ -31,18 +33,21 @@ function describeFetchError(error) {
   return detail && detail !== message ? `${message} (${detail})` : message;
 }
 
-async function probeFetch(url, options, effectiveProxy) {
+async function probeFetch(url, options, effectiveProxy, connection = null) {
   if (!options.signal) options.signal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   try {
-    return await probeFetchOnce(url, options, effectiveProxy);
+    return await probeFetchOnce(url, options, effectiveProxy, connection);
   } catch (error) {
     if (options.signal.aborted || !isTransientSocketError(error)) throw error;
     // One retry opens a fresh connection; the shared signal keeps the overall deadline.
-    return probeFetchOnce(url, options, effectiveProxy);
+    return probeFetchOnce(url, options, effectiveProxy, connection);
   }
 }
 
-async function probeFetchOnce(url, options, effectiveProxy) {
+async function probeFetchOnce(url, options, effectiveProxy, connection) {
+  if (connection && isCustomApiProvider(connection.provider)) {
+    return fetchCustomApiDiagnostic(connection, url, options, effectiveProxy);
+  }
   if (effectiveProxy?.vercelRelayUrl) {
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
     return proxyAwareFetch(url, options, { vercelRelayUrl: effectiveProxy.vercelRelayUrl });
@@ -206,6 +211,7 @@ export async function probeModelEndpoint({
   format = "openai",
   provider,
   providerSpecificData,
+  connectionId,
   headers: extraHeaders,
   authHeader,
   proxy,
@@ -221,10 +227,12 @@ export async function probeModelEndpoint({
 
   const isAnthropic = format === "claude";
   const url = completionUrl(baseUrl, format);
+  const connection = { provider, apiKey, connectionId, providerSpecificData: { ...providerSpecificData, baseUrl } };
 
   try {
     let res;
-    if (isAnthropic && isAnthropicCompatibleProvider(provider) && providerSpecificData?.executionMode === CLAUDE_CODE.executionMode) {
+    if (isAnthropic && isAnthropicCompatibleProvider(provider) && providerSpecificData?.executionMode === CLAUDE_CODE.executionMode
+      && providerSpecificData?.anonymizeRequests !== true && providerSpecificData?.customApiSessionPinning !== true) {
       const { probeClaudeCodeModel } = await import("./claudeCode");
       res = await probeClaudeCodeModel({
         baseUrl, apiKey, model, authMode: providerSpecificData.authMode || "api-key",
@@ -246,7 +254,7 @@ export async function probeModelEndpoint({
           messages: [{ role: "user", content: "hi" }],
         }),
         signal,
-      }, proxy);
+      }, proxy, connection);
     } else {
       const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
       if (apiKey) {
@@ -263,7 +271,7 @@ export async function probeModelEndpoint({
           messages: [{ role: "user", content: "hi" }],
         }),
         signal,
-      }, proxy);
+      }, proxy, connection);
     }
 
     const latencyMs = Date.now() - start;
@@ -318,6 +326,7 @@ export async function probeConnectionModel(connection, modelId, options = {}) {
     model: modelId,
     format: isAnthropicCompatibleProvider(connection.provider) ? "claude" : "openai",
     provider: connection.provider,
+    connectionId: connection.id,
     providerSpecificData: connection.providerSpecificData,
     proxy: effectiveProxy,
     signal: options.signal,
@@ -347,7 +356,7 @@ export async function fetchModelContextLengths(connection, options = {}) {
     : { "Authorization": `Bearer ${apiKey}` };
 
   try {
-    const res = await probeFetch(`${base}/models`, { method: "GET", headers }, effectiveProxy);
+    const res = await probeFetch(`${base}/models`, { method: "GET", headers }, effectiveProxy, connection);
     if (!res.ok) return {};
     const data = await res.json().catch(() => null);
     const list = Array.isArray(data) ? data : (data?.data || data?.models || data?.results || []);

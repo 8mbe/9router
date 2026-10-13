@@ -3,6 +3,10 @@ import { detectClientTool, isClaudeCodeClient } from "../../utils/clientDetector
 
 export function isClaudeCodeRuntimeEnabled(provider, credentials) {
   return Boolean(provider?.startsWith(CLAUDE_CODE.providerPrefix)
+    // The native subprocess sends its own requests outside the router's
+    // anonymization and pinned proxy transport. Use direct execution for both.
+    && credentials?.providerSpecificData?.anonymizeRequests !== true
+    && credentials?.providerSpecificData?.customApiSessionPinning !== true
     && credentials?.providerSpecificData?.executionMode === CLAUDE_CODE.executionMode);
 }
 

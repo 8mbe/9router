@@ -14,6 +14,8 @@ import { resolveCursorModels } from "open-sse/services/cursorModels.js";
 import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveClineModels, resolveClinepassModels } from "open-sse/services/clinepassModels.js";
 import codexProvider from "open-sse/providers/registry/codex.js";
+import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
+import { FETCH_CONNECT_TIMEOUT_MS } from "open-sse/config/runtimeConfig.js";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 
@@ -539,7 +541,7 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    if (isOpenAICompatibleProvider(connection.provider)) {
+    if (isOpenAICompatibleProvider(connection.provider) || connection.provider?.startsWith("custom-embedding-")) {
       const baseUrl = connection.providerSpecificData?.baseUrl;
       if (!baseUrl) {
         return NextResponse.json({ error: "No base URL configured for OpenAI compatible provider" }, { status: 400 });
@@ -553,11 +555,14 @@ export async function GET(request, { params }) {
         "Authorization": `Bearer ${connection.apiKey}`,
       };
       let typed = false;
-      let response = kind ? await fetch(`${modelsUrl}/${kind}`, { method: "GET", headers }) : null;
+      const timeout = AbortSignal.timeout(FETCH_CONNECT_TIMEOUT_MS);
+      const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+      let response = kind ? await fetchCustomApiDiagnostic(connection, `${modelsUrl}/${kind}`, { method: "GET", headers, signal }) : null;
       if (response?.ok) typed = true;
-      else response = await fetch(modelsUrl, {
+      else response = await fetchCustomApiDiagnostic(connection, modelsUrl, {
         method: "GET",
         headers,
+        signal,
       });
 
       if (!response.ok) {
@@ -594,8 +599,10 @@ export async function GET(request, { params }) {
       }
 
       const url = `${baseUrl}/models`;
-      const response = await fetch(url, {
+      const timeout = AbortSignal.timeout(FETCH_CONNECT_TIMEOUT_MS);
+      const response = await fetchCustomApiDiagnostic(connection, url, {
         method: "GET",
+        signal: request.signal ? AbortSignal.any([request.signal, timeout]) : timeout,
         headers: {
           "Content-Type": "application/json",
           "x-api-key": connection.apiKey,
