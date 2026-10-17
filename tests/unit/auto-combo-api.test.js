@@ -68,6 +68,18 @@ describe("combo status API", () => {
     expect(state.resolve).not.toHaveBeenCalled();
   });
 
+  it("reports the saved manual order even when a later member is working", async () => {
+    state.combos.writing = ["cc/claude-opus-5", "cu/claude-4.6-opus"];
+    state.settings = { comboStrategies: { writing: { fallbackStrategy: "manual" } } };
+    state.inspect.mockResolvedValue([
+      { member: state.combos.writing[0], status: "not_working" },
+      { member: state.combos.writing[1], status: "working" },
+    ]);
+    const data = await (await GET(request("writing"))).json();
+    expect(data).toMatchObject({ source: "combo", strategy: "manual", resolved: { models: state.combos.writing } });
+    expect(state.resolve).not.toHaveBeenCalled();
+  });
+
   it.each(["cc/claude-opus-5", { provider: "cc", model: "claude-opus-5" }])("inspects explicit alias %j", async (alias) => {
     state.aliases.writing = alias;
     const data = await (await GET(request("writing"))).json();

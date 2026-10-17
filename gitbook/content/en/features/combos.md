@@ -100,7 +100,9 @@ Subscription first, cheap backup, free emergency
 3. minimax/MiniMax-M2.1
 ```
 
-**Drag to reorder** - Priority from top to bottom.
+**Set model priority:** Drag models, use the up/down arrows, or click **Use first** to move a model to the top. Save the combo to keep the order.
+
+Choose **Manual: use saved order** on the combo card to always try models from top to bottom. It overrides automatic capability selection for image and audio requests. Later models are still tried if an earlier one fails with a retryable error. The existing **Fallback** strategy can move a model that supports the request's input ahead of your first choice; **Round Robin** rotates across requests and **Fusion** queries all panel models.
 
 ### Step 4: Save
 

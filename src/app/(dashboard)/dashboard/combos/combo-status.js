@@ -155,7 +155,7 @@ export function ComboStatusSection({ status }) {
     if (!models.some((existing) => existing.toLowerCase() === member.toLowerCase())) models.push(member);
   }
   const source = { combo: "Saved combo", alias: "Model alias", automatic: "Automatic combo" }[status.data?.source] || "No match";
-  const strategy = { fallback: "Fallback", "round-robin": "Round robin", fusion: "Fusion" }[status.data?.strategy] || "Fallback";
+  const strategy = { fallback: "Fallback", manual: "Manual order", "round-robin": "Round robin", fusion: "Fusion" }[status.data?.strategy] || "Fallback";
   const automaticDisabled = status.data?.enabled === false && !["combo", "alias"].includes(status.data?.source);
 
   return (
@@ -205,7 +205,8 @@ export function ComboStatusSection({ status }) {
                   {status.data.source === "automatic"
                     ? "Fallback order. Working routes are preferred first. Failed routes stay in the pool."
                     : status.data.source === "alias" ? "This alias routes to the provider below."
-                      : status.data.strategy === "fallback" ? "Configured fallback order. Failed routes stay visible."
+                      : status.data.strategy === "manual" ? "Your saved order is used first to last, including image and audio requests."
+                        : status.data.strategy === "fallback" ? "Configured fallback order. Failed routes stay visible."
                         : "Configured model order. Requests use the selected strategy."}
                 </p>
                 <MemberList models={models} status={status} />

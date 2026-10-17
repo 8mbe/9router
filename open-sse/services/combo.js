@@ -201,7 +201,7 @@ function rotateModelsFromIndex(models, currentIndex) {
  * Get rotated model list based on strategy
  * @param {string[]} models - Array of model strings
  * @param {string} comboName - Name of the combo
- * @param {string} strategy - "fallback" or "round-robin"
+ * @param {string} strategy - "fallback", "manual" or "round-robin"
  * @param {number|string} [stickyLimit=1] - Requests per combo model before switching
  * @returns {string[]} Rotated models array
  */
@@ -313,7 +313,7 @@ export function isZeroContentResponse(data) {
  * @param {Function} options.handleSingleModel - Function to handle single model: (body, modelStr) => Promise<Response>
  * @param {Object} options.log - Logger object
  * @param {string} [options.comboName] - Name of the combo (for round-robin tracking)
- * @param {string} [options.comboStrategy] - Strategy: "fallback" or "round-robin"
+ * @param {string} [options.comboStrategy] - Strategy: "fallback", "manual" or "round-robin"
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
  * @returns {Promise<Response>}
  */
@@ -321,8 +321,8 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
   // Apply rotation strategy if enabled
   let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
 
-  // Auto-switch: float models that satisfy the request's required capabilities to the front.
-  if (autoSwitch) {
+  // Manual order takes priority over capability-based selection.
+  if (autoSwitch && comboStrategy !== "manual") {
     const required = detectRequiredCapabilities(body);
     if (required.size > 0) {
       const reordered = reorderByCapabilities(rotatedModels, required);

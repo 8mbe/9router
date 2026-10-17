@@ -25,6 +25,7 @@ import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { FREE_PROVIDERS, getProviderAlias } from "@/shared/constants/providers";
 import { peekCachedUpstream } from "@/lib/modelCatalog/upstreamCache";
+import { inferCompatibleModelKind } from "@/shared/utils/compatibleMedia";
 import { getProbeHints, partitionByProbe } from "@/lib/modelProbe/routingHints";
 import { parseModel } from "open-sse/services/model.js";
 import { isModelLockActive, getModelLockKey, MODEL_LOCK_ALL } from "open-sse/services/accountFallback.js";
@@ -50,9 +51,15 @@ function catalogForConnection(providerId, conn) {
     const baseUrl = typeof conn?.providerSpecificData?.baseUrl === "string"
       ? conn.providerSpecificData.baseUrl.trim().replace(/\/$/, "")
       : "";
-    const compat = peekCachedUpstream(`compat:${conn.id}:${baseUrl}`);
+    const compat = peekCachedUpstream(`compat:${conn.id}:${baseUrl}:llm`);
     if (Array.isArray(compat) && compat.length > 0) {
-      return compat.filter((id) => typeof id === "string" && id.trim());
+      return compat
+        .filter((model) => {
+          const kind = model?.kind || model?.type || inferCompatibleModelKind(typeof model === "string" ? { id: model } : model);
+          return kind === "llm" || kind === "imageToText";
+        })
+        .map((model) => typeof model === "string" ? model : model?.id)
+        .filter((id) => typeof id === "string" && id.trim());
     }
   }
 

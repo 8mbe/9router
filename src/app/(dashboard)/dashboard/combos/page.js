@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -49,6 +49,7 @@ function normalizeCapEntry(entry) {
 
 const STRATEGY_OPTIONS = [
   { value: "fallback", label: "Fallback: try in order" },
+  { value: "manual", label: "Manual: use saved order" },
   { value: "round-robin", label: "Round Robin: rotate" },
   { value: "fusion", label: "Fusion: panel + judge" },
 ];
@@ -243,11 +244,12 @@ export default function CombosPage() {
   };
 
   const persistComboStrategies = async (updated) => {
-    await fetch("/api/settings", {
+    const response = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ comboStrategies: updated }),
     });
+    if (!response.ok) throw new Error("Failed to save combo strategy");
     setComboStrategies(updated);
   };
 
@@ -326,6 +328,7 @@ export default function CombosPage() {
       await persistComboStrategies(updated);
     } catch (error) {
       console.log("Error updating combo strategy:", error);
+      alert("Could not save the routing strategy. Please try again.");
     }
   };
 
@@ -372,6 +375,7 @@ export default function CombosPage() {
           </p>
           <ul className="text-sm text-text-muted mt-2 flex flex-col gap-1">
             <li><span className="font-medium text-text-main">Fallback</span> tries models in order, then moves to the next on failure.</li>
+            <li><span className="font-medium text-text-main">Manual</span> always starts with your first model and follows your saved order, including image and audio requests.</li>
             <li><span className="font-medium text-text-main">Round Robin</span> rotates models across requests to spread load.</li>
             <li><span className="font-medium text-text-main">Fusion</span> queries all models in parallel, then a judge combines their answers. Each request bills all panel models and the judge.</li>
           </ul>
@@ -604,7 +608,8 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
               ) : (
                 combo.models.slice(0, 3).map((model, index) => (
                   <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
-                    <span>{model}</span>
+                    <span className="shrink-0 font-sans" aria-label={`Priority ${index + 1}`}>{index + 1}.</span>
+                    <span className="min-w-0 break-all">{model}</span>
                     <CapacityBadges caps={
                       comboByName[model]
                         ? aggregateComboCapabilities(comboByName[model], comboByName, getCaps)
@@ -655,6 +660,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
           {/* Strategy selector — always visible */}
           <div className="w-full sm:w-[200px]">
             <Select
+              aria-label={`Routing strategy for ${combo.name}`}
               options={STRATEGY_OPTIONS}
               value={current}
               onChange={(e) => onSetStrategy({ fallbackStrategy: e.target.value })}
@@ -926,7 +932,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps, ro
   );
 }
 
-function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMoveDown, onRemove }) {
+function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveFirst, onMoveUp, onMoveDown, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -952,14 +958,15 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
     <div
       ref={setNodeRef}
       style={style}
-      className={`group flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 bg-black/[0.02] hover:bg-black/[0.04] dark:bg-white/[0.02] dark:hover:bg-white/[0.04] transition-colors ${isDragging ? "shadow-md ring-1 ring-primary/30" : ""}`}
+      className={`group grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-1.5 rounded-md px-2 py-1 sm:flex bg-black/[0.02] hover:bg-black/[0.04] dark:bg-white/[0.02] dark:hover:bg-white/[0.04] transition-colors ${isDragging ? "shadow-md ring-1 ring-primary/30" : ""}`}
     >
       {/* Drag handle */}
       <button
         {...attributes}
         {...listeners}
         type="button"
-        className="cursor-grab touch-none p-0.5 rounded text-text-muted hover:text-primary active:cursor-grabbing shrink-0"
+        className="min-h-11 min-w-11 cursor-grab touch-none rounded text-text-muted hover:text-primary active:cursor-grabbing shrink-0 flex items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main"
+        aria-label={`Reorder ${model}`}
         title="Drag to reorder"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -984,8 +991,18 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
         />
       ) : (
         <div
-          className="min-w-0 flex-1 cursor-text truncate rounded px-1.5 py-0.5 font-mono text-xs text-text-main hover:bg-black/5 dark:hover:bg-white/5"
-          onClick={() => setEditing(true)}
+          className="min-w-0 flex-1 cursor-text truncate rounded px-1.5 py-0.5 font-mono text-xs text-text-main hover:bg-black/5 dark:hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main"
+          aria-label={`Edit ${model}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => { setDraft(model); setEditing(true); }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              setDraft(model);
+              setEditing(true);
+            }
+          }}
           title="Click to edit"
         >
           {model}
@@ -993,11 +1010,21 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
       )}
 
       {/* Priority arrows */}
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="col-span-3 col-start-2 row-start-2 flex shrink-0 items-center justify-end gap-0.5">
+        <button
+          type="button"
+          onClick={onMoveFirst}
+          disabled={isFirst}
+          aria-label={`Use ${model} first`}
+          className="min-h-11 rounded px-2 text-xs font-medium text-text-main hover:bg-black/5 disabled:cursor-default disabled:text-text-muted dark:hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main"
+        >
+          {isFirst ? "First" : "Use first"}
+        </button>
         <button
           onClick={onMoveUp}
           disabled={isFirst}
-          className={`p-0.5 rounded ${isFirst ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
+          aria-label={`Move ${model} up`}
+          className={`min-h-11 min-w-11 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main ${isFirst ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
           title="Move up"
         >
           <span className="material-symbols-outlined text-[12px]">arrow_upward</span>
@@ -1005,7 +1032,8 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
         <button
           onClick={onMoveDown}
           disabled={isLast}
-          className={`p-0.5 rounded ${isLast ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
+          aria-label={`Move ${model} down`}
+          className={`min-h-11 min-w-11 rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main ${isLast ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
           title="Move down"
         >
           <span className="material-symbols-outlined text-[12px]">arrow_downward</span>
@@ -1015,7 +1043,8 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
       {/* Remove */}
       <button
         onClick={onRemove}
-        className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 transition-all"
+        aria-label={`Remove ${model}`}
+        className="col-start-4 row-start-1 min-h-11 min-w-11 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main"
         title="Remove"
       >
         <span className="material-symbols-outlined text-[12px]">close</span>
@@ -1027,7 +1056,9 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
 function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindFilter = null }) {
   // Initialize state with combo values - key prop on parent handles reset on remount
   const [name, setName] = useState(combo?.name || "");
-  const [models, setModels] = useState(combo?.models || []);
+  const [modelItems, setModelItems] = useState(() => (combo?.models || []).map((model, index) => ({ uid: `item-${index}`, model })));
+  const nextModelId = useRef(modelItems.length);
+  const models = modelItems.map((item) => item.model);
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -1038,16 +1069,13 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Use stable index-based IDs so duplicates and similar names are handled correctly
-  const modelItems = models.map((model, i) => ({ uid: `item-${i}`, model }));
-
   const handleDragEnd = (event) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
       const oldIndex = modelItems.findIndex((m) => m.uid === active.id);
       const newIndex = modelItems.findIndex((m) => m.uid === over.id);
       if (oldIndex !== -1 && newIndex !== -1) {
-        setModels((prev) => arrayMove(prev, oldIndex, newIndex));
+        setModelItems((prev) => arrayMove(prev, oldIndex, newIndex));
       }
     }
   };
@@ -1089,30 +1117,31 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
 
   const handleAddModel = (model) => {
     if (!models.includes(model.value)) {
-      setModels([...models, model.value]);
+      const item = { uid: `item-${nextModelId.current++}`, model: model.value };
+      setModelItems((previous) => [...previous, item]);
     }
   };
 
   const handleDeselectModel = (model) => {
-    setModels(models.filter((m) => m !== model.value));
+    setModelItems((previous) => previous.filter((item) => item.model !== model.value));
   };
 
   const handleRemoveModel = (index) => {
-    setModels(models.filter((_, i) => i !== index));
+    setModelItems((previous) => previous.filter((_, i) => i !== index));
   };
 
   const handleMoveUp = (index) => {
     if (index === 0) return;
-    const newModels = [...models];
-    [newModels[index - 1], newModels[index]] = [newModels[index], newModels[index - 1]];
-    setModels(newModels);
+    setModelItems((previous) => arrayMove(previous, index, index - 1));
   };
 
   const handleMoveDown = (index) => {
     if (index === models.length - 1) return;
-    const newModels = [...models];
-    [newModels[index], newModels[index + 1]] = [newModels[index + 1], newModels[index]];
-    setModels(newModels);
+    setModelItems((previous) => arrayMove(previous, index, index + 1));
+  };
+
+  const handleMoveFirst = (index) => {
+    setModelItems((previous) => arrayMove(previous, index, 0));
   };
 
   const handleSave = async () => {
@@ -1148,7 +1177,11 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
 
           {/* Models */}
           <div>
-            <label className="text-sm font-medium mb-1.5 block">Models</label>
+            <label className="text-sm font-medium mb-1.5 block">Model priority</label>
+            <p className="mb-2 text-xs text-text-muted">
+              Drag models or use the arrows to set the order. The first model is tried first with Fallback or Manual.
+              Choose Manual on the combo to keep this order for image and audio requests too.
+            </p>
 
             {models.length === 0 ? (
               <div className="text-center py-4 border border-dashed border-black/10 dark:border-white/10 rounded-lg bg-black/[0.01] dark:bg-white/[0.01]">
@@ -1168,12 +1201,11 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
                       isFirst={index === 0}
                       isLast={index === modelItems.length - 1}
                       onEdit={(newVal) => {
-                        const updated = [...models];
-                        updated[index] = newVal;
-                        setModels(updated);
+                        setModelItems((previous) => previous.map((item) => item.uid === uid ? { ...item, model: newVal } : item));
                       }}
                       onMoveUp={() => handleMoveUp(index)}
                       onMoveDown={() => handleMoveDown(index)}
+                      onMoveFirst={() => handleMoveFirst(index)}
                       onRemove={() => handleRemoveModel(index)}
                     />
                   ))}
