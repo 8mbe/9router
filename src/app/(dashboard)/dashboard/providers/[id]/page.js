@@ -62,8 +62,8 @@ export default function ProviderDetailPage() {
   const [customModels, setCustomModels] = useState([]);
   const [headerImgError, setHeaderImgError] = useState(false);
   const [modelTestResults, setModelTestResults] = useState({});
-  const [modelsTestError, setModelsTestError] = useState("");
   const [testingModelIds, setTestingModelIds] = useState(() => new Set());
+  const [testingModelTypes, setTestingModelTypes] = useState({});
   const [showAddCustomModel, setShowAddCustomModel] = useState(false);
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([]);
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState("__none__");
@@ -1188,24 +1188,25 @@ export default function ProviderDetailPage() {
     </Modal>
   );
 
-  const handleTestModel = async (modelId) => {
+  const handleTestModel = async (modelId, testType = "ping") => {
     if (testingModelIds.has(modelId)) return;
     setTestingModelIds((prev) => new Set(prev).add(modelId));
+    setTestingModelTypes((prev) => ({ ...prev, [modelId]: testType }));
     try {
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: `${providerStorageAlias}/${modelId}` }),
+        body: JSON.stringify({ model: `${providerStorageAlias}/${modelId}`, testType }),
       });
       const data = await res.json();
       setModelTestResults((prev) => ({
         ...prev,
-        [modelId]: { status: data.ok ? "ok" : "error", latencyMs: data.latencyMs },
+        [modelId]: { ...prev[modelId], status: data.ok ? "ok" : "error", [testType]: data },
       }));
-      setModelsTestError(data.ok ? "" : (data.error || "Model not reachable"));
-    } catch {
-      setModelTestResults((prev) => ({ ...prev, [modelId]: { status: "error" } }));
-      setModelsTestError("Network error");
+    } catch (error) {
+      setModelTestResults((prev) => ({ ...prev, [modelId]: {
+        ...prev[modelId], status: "error", [testType]: { ok: false, error: error.message || "Network error" },
+      } }));
     } finally {
       setTestingModelIds((prev) => { const n = new Set(prev); n.delete(modelId); return n; });
     }
@@ -1269,7 +1270,7 @@ export default function ProviderDetailPage() {
       && disabledDisplayModels.length === 0;
 
     return (
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         {/* Custom models first */}
         {customModelRows.map((model) => (
           <ModelRow
@@ -1288,8 +1289,9 @@ export default function ProviderDetailPage() {
               }
             }}
             testStatus={modelTestResults[model.id]?.status}
-            latencyMs={modelTestResults[model.id]?.latencyMs}
-            onTest={connections.length > 0 || isFreeNoAuth ? () => handleTestModel(model.id) : undefined}
+            testResults={modelTestResults[model.id]}
+            testingType={testingModelTypes[model.id]}
+            onTest={connections.length > 0 || isFreeNoAuth ? (testType) => handleTestModel(model.id, testType) : undefined}
             isTesting={testingModelIds.has(model.id)}
             isCustom
             isFree={false}
@@ -1315,8 +1317,9 @@ export default function ProviderDetailPage() {
               onSetAlias={(alias) => handleSetAlias(model.id, alias, providerStorageAlias)}
               onDeleteAlias={() => handleDeleteAlias(existingAlias)}
               testStatus={modelTestResults[model.id]?.status}
-              latencyMs={modelTestResults[model.id]?.latencyMs}
-              onTest={connections.length > 0 || isFreeNoAuth ? () => handleTestModel(model.id) : undefined}
+              testResults={modelTestResults[model.id]}
+              testingType={testingModelTypes[model.id]}
+              onTest={connections.length > 0 || isFreeNoAuth ? (testType) => handleTestModel(model.id, testType) : undefined}
               isTesting={testingModelIds.has(model.id)}
               isFree={model.isFree}
               onDisable={() => handleDisableModel(model.id)}
@@ -1906,35 +1909,6 @@ export default function ProviderDetailPage() {
             </button>
           )}
         </div>
-        {!!modelsTestError && (
-          <div className="mb-3">
-            <p className="text-xs text-red-500 break-words">{modelsTestError}</p>
-            {/RegionError|hosted in China|regionNotAllowed/i.test(modelsTestError) && (() => {
-              const str = typeof modelsTestError === "string" ? modelsTestError : JSON.stringify(modelsTestError);
-              const linkMatch = str.match(/https:\/\/opencode\.ai\/workspace\/[^\s"')]+/);
-              const wrkMatch = str.match(/wrk_[0-9A-Za-z]+/);
-              const targetUrl = linkMatch
-                ? (linkMatch[0].endsWith("/go") ? linkMatch[0] : `${linkMatch[0]}/go`)
-                : wrkMatch
-                  ? `https://opencode.ai/workspace/${wrkMatch[0]}/go`
-                  : "https://opencode.ai";
-
-              return (
-                <div className="mt-1.5">
-                  <a
-                    href={targetUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 hover:bg-amber-500/20 dark:text-amber-400 transition-colors"
-                  >
-                    <span>Allow China-hosted models</span>
-                    <span className="material-symbols-outlined text-[13px]">open_in_new</span>
-                  </a>
-                </div>
-              );
-            })()}
-          </div>
-        )}
         {providerId === "zed" && !!liveModelsError && (
           <p className="text-xs text-red-500 mb-3 break-words">{liveModelsError}</p>
         )}

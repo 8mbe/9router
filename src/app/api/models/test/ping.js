@@ -3,6 +3,7 @@ import { resolveProviderId } from "@/shared/constants/providers.js";
 import { unwrapClineEnvelope } from "open-sse/shared/clineEnvelope.js";
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
+import { consumeProbeStream, ESSAY_PROMPT, ESSAY_TIMEOUT_MS, PING_PROMPT } from "@/lib/modelProbe/streamMetrics";
 
 const CLI_TOKEN_SALT = "9r-cli-auth";
 
@@ -55,7 +56,7 @@ async function getInternalHeaders() {
   return headers;
 }
 
-export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
+export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`, options = {}) {
   const headers = await getInternalHeaders();
   const start = Date.now();
 
@@ -174,12 +175,17 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
       // their budget on chain-of-thought before emitting an answer. A tiny probe like
       // max_tokens:16 starves the answer and yields a false "no choices" failure.
       // See issue #3010.
-      max_tokens: 1024,
-      stream: false,
-      messages: [{ role: "user", content: "hi" }],
+      max_tokens: options.testType === "essay" ? 2048 : 1024,
+      stream: Boolean(options.testType),
+      ...(options.testType ? { stream_options: { include_usage: true } } : {}),
+      messages: [{ role: "user", content: options.testType === "essay" ? ESSAY_PROMPT : PING_PROMPT }],
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: options.signal || AbortSignal.timeout(options.testType === "essay" ? ESSAY_TIMEOUT_MS : 15000),
   });
+  if (options.testType) {
+    const verdict = await consumeProbeStream(res, { startTime: start, signal: options.signal });
+    return { ...verdict, latencyMs: Date.now() - start, status: res.status };
+  }
   const latencyMs = Date.now() - start;
 
   const rawText = await res.text().catch(() => "");

@@ -6,6 +6,8 @@ import { Button } from "@/shared/components";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import { extractContextLength, formatContextLength } from "@/lib/modelProbe/contextLength";
 import { formatLatency } from "@/shared/utils/latency";
+import ModelTestResults, { ModelTestControls } from "@/shared/components/ModelTestResults";
+import { aggregateModelTestResults } from "@/shared/utils/modelTestResults";
 
 const CONCURRENCY_KEY = "9router.modelProbe.concurrency";
 const MIN_CONCURRENCY = 1;
@@ -72,6 +74,18 @@ function shortKeyLabel(connection) {
   return connection?.name || connection?.email || connection?.label || `Key ${String(connection?.id || "").slice(0, 6)}`;
 }
 
+function mergeTestResults(previous, incoming = []) {
+  const merged = new Map(previous.map((result) => [
+    JSON.stringify([result.testType || "ping", result.modelId, result.connectionId]), result,
+  ]));
+  for (const result of incoming) {
+    const key = JSON.stringify([result.testType || "ping", result.modelId, result.connectionId]);
+    if (result.state === "done") merged.set(key, result);
+    else merged.delete(key);
+  }
+  return [...merged.values()];
+}
+
 /**
  * One key's verdict for one model. Colour is the whole signal at a glance; the
  * title carries the error, which is what makes a red chip actionable.
@@ -132,7 +146,7 @@ KeyChip.propTypes = {
 
 function CompatibleModelRow({
   modelId, fullModel, contextLength, copied, onCopy, onDeleteAlias,
-  onTest, isTesting, connections, keyStates,
+  onTest, isTesting, testingType, connections, keyStates, testResults = {},
 }) {
   const anyOk = connections.some((c) => keyStates[c.id]?.state === "ok");
   const anyFailed = connections.some((c) => keyStates[c.id]?.state === "failed");
@@ -181,11 +195,12 @@ function CompatibleModelRow({
           </span>
         </div>
 
-        <div className="flex items-center gap-1 mt-1">
-          <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
+        <div className="flex flex-wrap items-center gap-1 mt-1">
+          <code className="max-w-full break-all text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
           <div className="relative group/btn">
             <button
               onClick={() => onCopy(fullModel, `model-${modelId}`)}
+              aria-label={`Copy ${fullModel}`}
               className="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary"
             >
               <span className="material-symbols-outlined text-sm">
@@ -197,20 +212,7 @@ function CompatibleModelRow({
             </span>
           </div>
           {onTest && (
-            <div className="relative group/btn">
-              <button
-                onClick={onTest}
-                disabled={isTesting}
-                className="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary transition-colors"
-              >
-                <span className="material-symbols-outlined text-sm" style={isTesting ? { animation: "spin 1s linear infinite" } : undefined}>
-                  {isTesting ? "progress_activity" : "science"}
-                </span>
-              </button>
-              <span className="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-                {isTesting ? "Testing..." : "Test every key"}
-              </span>
-            </div>
+            <ModelTestControls onTest={onTest} isTesting={isTesting} testingType={testingType} />
           )}
         </div>
 
@@ -232,7 +234,10 @@ function CompatibleModelRow({
           </div>
         )}
 
-        {failureGroups.length > 0 && (
+        <ModelTestResults result={testResults.ping} testType="ping" />
+        <ModelTestResults result={testResults.essay} testType="essay" />
+
+        {!testResults.ping && !testResults.essay && failureGroups.length > 0 && (
           <ul className="mt-1.5 space-y-0.5">
             {failureGroups.slice(0, MAX_FAILURE_LINES).map(({ error, labels }) => (
               <li key={error} className="text-[11px] text-red-600 dark:text-red-400 break-words line-clamp-2" title={error}>
@@ -270,8 +275,10 @@ CompatibleModelRow.propTypes = {
   onDeleteAlias: PropTypes.func.isRequired,
   onTest: PropTypes.func,
   isTesting: PropTypes.bool,
+  testingType: PropTypes.string,
   connections: PropTypes.array.isRequired,
   keyStates: PropTypes.object.isRequired,
+  testResults: PropTypes.object,
 };
 
 export default function CompatibleModelsSection({
@@ -289,6 +296,7 @@ export default function CompatibleModelsSection({
   );
   const [job, setJob] = useState(null);
   const [probes, setProbes] = useState([]);
+  const [testResults, setTestResults] = useState([]);
   const [probeError, setProbeError] = useState("");
   const [startingProbe, setStartingProbe] = useState(false);
   const pollTimer = useRef(null);
@@ -321,8 +329,12 @@ export default function CompatibleModelsSection({
         const data = await res.json();
         if (ignore || !res.ok) return;
         setProbes(data.probes || []);
+        setTestResults((previous) => mergeTestResults(previous, data.results || []));
         // Re-attach to a run still in flight after a reload or tab switch.
-        if (data.job && data.job.status === "running") setJob(data.job);
+        if (data.job && data.job.status === "running") {
+          setJob(data.job);
+          setTestResults((previous) => mergeTestResults(previous, data.job.tasks));
+        }
       } catch { /* transient — the next poll or action retries */ }
     })();
     return () => { ignore = true; };
@@ -339,11 +351,16 @@ export default function CompatibleModelsSection({
         const res = await fetch(`${probeUrl}?jobId=${encodeURIComponent(job.jobId)}`, { cache: "no-store" });
         const data = await res.json();
         if (cancelled) return;
-        if (!res.ok) { setJob((prev) => (prev ? { ...prev, status: "done" } : prev)); return; }
+        if (!res.ok) {
+          setProbeError(data.error || "Failed to read test progress");
+          setJob((prev) => (prev ? { ...prev, status: "done" } : prev));
+          return;
+        }
         setJob(data.job);
+        setTestResults((previous) => mergeTestResults(previous, data.job?.tasks));
         if (data.job?.status !== "running") reloadProbes();
-      } catch {
-        if (!cancelled) setJob((prev) => (prev ? { ...prev, status: "done" } : prev));
+      } catch (error) {
+        if (!cancelled) setProbeError(error.message || "Failed to read test progress");
       }
     };
 
@@ -397,6 +414,24 @@ export default function CompatibleModelsSection({
     return map;
   }, [probes, job, providerStorageAlias]);
 
+  const resultsByModel = useMemo(() => {
+    const groups = {};
+    const activeKeys = new Map(testableConnections.map((connection) => [connection.id, connection]));
+    for (const result of testResults) {
+      const connection = activeKeys.get(result.connectionId);
+      if (!connection) continue;
+      const group = (groups[result.modelId] ||= {});
+      const testType = result.testType || "ping";
+      (group[testType] ||= []).push({ ...result, connectionName: shortKeyLabel(connection) });
+    }
+    return Object.fromEntries(Object.entries(groups).map(([modelId, modes]) => [
+      modelId,
+      Object.fromEntries(Object.entries(modes).map(([testType, results]) => [
+        testType, aggregateModelTestResults(results),
+      ])),
+    ]));
+  }, [testResults, testableConnections]);
+
   // Context comes from the model record; a verdict that carried one is the fallback,
   // so a model added by hand still shows a window once it has been tested.
   const contextByModel = useMemo(() => {
@@ -430,8 +465,8 @@ export default function CompatibleModelsSection({
     return set;
   }, [job]);
 
-  const startProbe = async (modelIds) => {
-    if (!probeUrl || startingProbe) return;
+  const startProbe = async (modelIds, testType) => {
+    if (!probeUrl || startingProbe || job?.status === "running") return;
     if (testableConnections.length === 0) {
       setProbeError("No active connection to test with.");
       return;
@@ -446,11 +481,13 @@ export default function CompatibleModelsSection({
           models: modelIds,
           connectionIds: testableConnections.map((c) => c.id),
           concurrency,
+          testType,
         }),
       });
       const data = await res.json();
       if (!res.ok) { setProbeError(data.error || "Failed to start tests"); return; }
       setJob(data.job);
+      setTestResults((previous) => mergeTestResults(previous, data.job?.tasks));
     } catch (error) {
       setProbeError(error.message || "Failed to start tests");
     } finally {
@@ -461,17 +498,28 @@ export default function CompatibleModelsSection({
   const stopProbe = async () => {
     if (!probeUrl || !job?.jobId) return;
     try {
-      await fetch(`${probeUrl}?jobId=${encodeURIComponent(job.jobId)}`, { method: "DELETE" });
-    } catch { /* the job ends on its own if the cancel never lands */ }
+      const res = await fetch(`${probeUrl}?jobId=${encodeURIComponent(job.jobId)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        setProbeError(data.error || "Failed to stop tests");
+      }
+    } catch (error) { setProbeError(error.message || "Failed to stop tests"); }
   };
 
   const clearProbes = async () => {
     if (!probeUrl) return;
     try {
-      await fetch(probeUrl, { method: "DELETE" });
+      const res = await fetch(probeUrl, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        setProbeError(data.error || "Failed to clear results");
+        return;
+      }
       setProbes([]);
+      setTestResults([]);
       setJob(null);
-    } catch { /* non-fatal */ }
+      setProbeError("");
+    } catch (error) { setProbeError(error.message || "Failed to clear results"); }
   };
 
   const handleAdd = async () => {
@@ -608,25 +656,27 @@ export default function CompatibleModelsSection({
               <Button size="sm" variant="secondary" icon="stop_circle" onClick={stopProbe}>
                 Stop
               </Button>
-            ) : (
+            ) : (["ping", "essay"].map((testType) => (
               <Button
+                key={testType}
                 size="sm"
+                variant={testType === "essay" ? "secondary" : "primary"}
                 icon="science"
-                onClick={() => startProbe(allModels.map((m) => m.id))}
+                onClick={() => startProbe(allModels.map((m) => m.id), testType)}
                 disabled={!canTest || startingProbe}
               >
-                {startingProbe ? "Starting..." : "Test all keys × models"}
+                {testType === "essay" ? "Essay all" : "Ping all"}
               </Button>
-            )}
+            )))}
 
-            <Button size="sm" variant="secondary" icon="delete_sweep" onClick={clearProbes} disabled={isRunning || probes.length === 0}>
+            <Button size="sm" variant="secondary" icon="delete_sweep" onClick={clearProbes} disabled={isRunning || startingProbe || (probes.length === 0 && testResults.length === 0)}>
               Clear results
             </Button>
 
             <p className="text-xs text-text-muted">
               {testableConnections.length} key{testableConnections.length === 1 ? "" : "s"} × {allModels.length} model
               {allModels.length === 1 ? "" : "s"} = {pairCount} test{pairCount === 1 ? "" : "s"}, {concurrency} at a time.
-              Runs in the background — you can leave this page.
+              Runs in the background. Essay measures streaming speed.
             </p>
           </div>
 
@@ -639,8 +689,8 @@ export default function CompatibleModelsSection({
                 />
               </div>
               <p className="text-xs text-text-muted">
-                {job.status === "running" ? "Testing" : job.status === "cancelled" ? "Stopped" : "Finished"}
-                {" — "}{job.completed}/{job.total} done · {job.passed} working · {job.failed} failed
+                {job.testType === "essay" ? "Essay" : "Ping"}: {job.status === "running" ? "testing" : job.status === "cancelled" ? "stopped" : "finished"}
+                {" · "}{job.completed}/{job.total} done · {job.passed} working · {job.failed} failed
               </p>
             </div>
           )}
@@ -666,10 +716,12 @@ export default function CompatibleModelsSection({
               copied={copied}
               onCopy={onCopy}
               onDeleteAlias={() => source === "custom" ? onDeleteCustomModel(id) : onDeleteAlias(alias)}
-              onTest={canTest ? () => startProbe([id]) : undefined}
-              isTesting={runningModelIds.has(id)}
+              onTest={canTest ? (testType) => startProbe([id], testType) : undefined}
+              isTesting={isRunning || startingProbe}
+              testingType={runningModelIds.has(id) ? job?.testType : undefined}
               connections={testableConnections}
               keyStates={keyStatesByModel[id] || {}}
+              testResults={resultsByModel[id] || {}}
             />
           ))}
         </div>

@@ -6,47 +6,26 @@ import { Card, Button, Modal } from "@/shared/components";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
-import { formatLatency } from "@/shared/utils/latency";
+import ModelTestResults, { ModelTestControls } from "@/shared/components/ModelTestResults";
 import { inferCompatibleModelKind } from "@/shared/utils/compatibleMedia";
 
 // ── ModelRow ───────────────────────────────────────────────────
-export function ModelRow({ model, fullModel, copied, onCopy, testStatus, latencyMs, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
+export function ModelRow({ model, fullModel, copied, onCopy, testStatus, testResults, testingType, allowEssay, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
   const borderColor = testStatus === "ok" ? "border-green-500/40" : testStatus === "error" ? "border-red-500/40" : "border-border";
   const iconColor = testStatus === "ok" ? "#22c55e" : testStatus === "error" ? "#ef4444" : undefined;
-  const latencyLabel = formatLatency(latencyMs);
 
   return (
-    <div className={`group px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
-      <div className="flex items-center gap-2">
+    <div className={`group w-full sm:w-auto min-w-0 max-w-full px-3 py-2 rounded-lg border ${borderColor} hover:bg-sidebar/50`}>
+      <div className="flex min-w-0 items-center gap-2">
         <span className="material-symbols-outlined text-base" style={iconColor ? { color: iconColor } : undefined}>
           {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
         </span>
-        <div className="flex flex-col gap-1">
-          <code className="text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <code className="break-all text-xs text-text-muted font-mono bg-sidebar px-1.5 py-0.5 rounded">{fullModel}</code>
           <span className="flex items-center gap-1 pl-1">
             {model.name && <span className="text-[9px] text-text-muted/70 italic">{model.name}</span>}
-            {latencyLabel && (
-              <span
-                title={testStatus === "error" ? "Time until the test failed" : "Round-trip time of the last test"}
-                className={`font-mono text-[9px] ${testStatus === "error" ? "text-red-500/80" : "text-green-600/90 dark:text-green-400/90"}`}
-              >
-                {latencyLabel}
-              </span>
-            )}
           </span>
         </div>
-        {onTest && (
-          <div className="relative group/btn">
-            <button onClick={onTest} disabled={isTesting} className={`p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary transition-opacity ${isTesting ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-              <span className="material-symbols-outlined text-sm" style={isTesting ? { animation: "spin 1s linear infinite" } : undefined}>
-                {isTesting ? "progress_activity" : "science"}
-              </span>
-            </button>
-            <span className="pointer-events-none absolute mt-1 top-5 left-1/2 -translate-x-1/2 text-[10px] text-text-muted whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity">
-              {isTesting ? "Testing..." : "Test"}
-            </span>
-          </div>
-        )}
         <div className="relative group/btn">
           <button onClick={() => onCopy(fullModel, `model-${model.id}`)} className="p-0.5 hover:bg-sidebar rounded text-text-muted hover:text-primary">
             <span className="material-symbols-outlined text-sm">{copied === `model-${model.id}` ? "check" : "content_copy"}</span>
@@ -62,6 +41,9 @@ export function ModelRow({ model, fullModel, copied, onCopy, testStatus, latency
           </button>
         )}
       </div>
+      {onTest && <div className="mt-2"><ModelTestControls onTest={onTest} isTesting={isTesting} testingType={testingType} allowEssay={allowEssay} /></div>}
+      <ModelTestResults result={testResults?.ping} testType="ping" />
+      <ModelTestResults result={testResults?.essay} testType="essay" />
     </div>
   );
 }
@@ -72,7 +54,9 @@ ModelRow.propTypes = {
   copied: PropTypes.string,
   onCopy: PropTypes.func.isRequired,
   testStatus: PropTypes.oneOf(["ok", "error"]),
-  latencyMs: PropTypes.number,
+  testResults: PropTypes.object,
+  testingType: PropTypes.string,
+  allowEssay: PropTypes.bool,
   isCustom: PropTypes.bool,
   isFree: PropTypes.bool,
   onDeleteAlias: PropTypes.func,
@@ -129,7 +113,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
   const [upstreamModels, setUpstreamModels] = useState([]);
   const [modelTestResults, setModelTestResults] = useState({});
   const [testingModelId, setTestingModelId] = useState(null);
-  const [testError, setTestError] = useState("");
+  const [testingType, setTestingType] = useState(null);
   const [showAddCustomModel, setShowAddCustomModel] = useState(false);
 
   const providerAlias = providerAliasOverride || getProviderAlias(providerId);
@@ -221,24 +205,25 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
     } catch (e) { console.log("delete custom model error:", e); }
   };
 
-  const handleTestModel = async (modelId) => {
+  const handleTestModel = async (modelId, testType = "ping") => {
     if (testingModelId) return;
     setTestingModelId(modelId);
+    setTestingType(testType);
     try {
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: `${providerAlias}/${modelId}`, kind: kindFilter }),
+        body: JSON.stringify({ model: `${providerAlias}/${modelId}`, kind: kindFilter, testType }),
       });
       const data = await res.json();
       setModelTestResults((prev) => ({
         ...prev,
-        [modelId]: { status: data.ok ? "ok" : "error", latencyMs: data.latencyMs },
+        [modelId]: { ...prev[modelId], status: data.ok ? "ok" : "error", [testType]: data },
       }));
-      setTestError(data.ok ? "" : (data.error || "Model not reachable"));
-    } catch {
-      setModelTestResults((prev) => ({ ...prev, [modelId]: { status: "error" } }));
-      setTestError("Network error");
+    } catch (error) {
+      setModelTestResults((prev) => ({ ...prev, [modelId]: {
+        ...prev[modelId], status: "error", [testType]: { ok: false, error: error.message || "Network error" },
+      } }));
     } finally { setTestingModelId(null); }
   };
 
@@ -266,9 +251,8 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Models{kindFilter ? ` — ${kindFilter.toUpperCase()}` : ""}</h2>
         </div>
-        {testError && <p className="text-xs text-red-500 mb-3 break-words">{testError}</p>}
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-start gap-3">
           {displayModels.map((model) => {
             const fullModel = `${providerAlias}/${model.id}`;
             const existingAlias = Object.entries(modelAliases).find(([, m]) => m === fullModel)?.[0];
@@ -283,8 +267,10 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
                 onSetAlias={(alias) => handleSetAlias(model.id, alias)}
                 onDeleteAlias={() => handleDeleteAlias(existingAlias)}
                 testStatus={modelTestResults[model.id]?.status}
-              latencyMs={modelTestResults[model.id]?.latencyMs}
-                onTest={kindFilter === "tts" ? undefined : () => handleTestModel(model.id)}
+                testResults={modelTestResults[model.id]}
+                testingType={testingType}
+                allowEssay={effectiveType === "llm"}
+                onTest={kindFilter === "tts" ? undefined : (testType) => handleTestModel(model.id, testType)}
                 isTesting={testingModelId === model.id}
                 isFree={model.isFree}
               />
@@ -301,8 +287,10 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
               onSetAlias={() => {}}
               onDeleteAlias={() => handleDeleteCustomModel(model.id)}
               testStatus={modelTestResults[model.id]?.status}
-              latencyMs={modelTestResults[model.id]?.latencyMs}
-              onTest={kindFilter === "tts" ? undefined : () => handleTestModel(model.id)}
+              testResults={modelTestResults[model.id]}
+              testingType={testingType}
+              allowEssay={effectiveType === "llm"}
+              onTest={kindFilter === "tts" ? undefined : (testType) => handleTestModel(model.id, testType)}
               isTesting={testingModelId === model.id}
               isCustom
             />

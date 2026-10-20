@@ -96,6 +96,39 @@ describe("model checks honor the selected key's Claude Code mode", () => {
     expect(worker.close).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("measures native essay tokens and keeps statistics after a runtime failure (%s)", async (fail) => {
+    let time = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    const worker = { close: vi.fn(async () => { time = 5000; }), sendUserMessage: vi.fn() };
+    mocks.createWorker.mockImplementation(async (options) => {
+      worker.sendUserMessage.mockImplementation(() => {
+        time = 1100;
+        options.onEvent({ type: "message_start", message: { id: "msg_essay", role: "assistant", content: [], usage: { output_tokens: 0 } } });
+        options.onEvent({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+        time = 1400;
+        options.onEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Small " } });
+        time = 1800;
+        options.onEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "essay." } });
+        options.onEvent({ type: "content_block_stop", index: 0 });
+        time = 2500;
+        options.onEvent({ type: "message_delta", usage: { output_tokens: 12 }, delta: { stop_reason: "end_turn" } });
+        options.onEvent({ type: "message_stop" });
+        options.onMessage(fail
+          ? { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Runtime failed after output"] }
+          : { type: "result", subtype: "success", is_error: false });
+      });
+      return worker;
+    });
+    const result = await probeConnectionModel(connection, "custom-model", { proxy: {}, testType: "essay" });
+    expect(result).toMatchObject({
+      ok: !fail, error: fail ? "Runtime failed after output" : null,
+      testType: "essay", ttftMs: 400, responseDurationMs: 400,
+      outputTokens: 12, tokensPerSecond: 30, tokensEstimated: false, latencyMs: 4000,
+    });
+    expect(worker.sendUserMessage).toHaveBeenCalledWith("write a small essay");
+    expect(worker.close).toHaveBeenCalledOnce();
+  });
+
   it("does not pass a successful runtime result without a completed model response", async () => {
     const worker = fakeWorker({ streamEvents: [] });
     const result = await probeConnectionModel(connection, "custom-model", { proxy: {} });

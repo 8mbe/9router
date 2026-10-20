@@ -45,6 +45,7 @@ export function serializeJob(job) {
     jobId: job.id,
     providerId: job.providerId,
     providerAlias: job.providerAlias,
+    testType: job.testType || "ping",
     status: job.status,
     concurrency: job.concurrency,
     total: job.total,
@@ -76,9 +77,38 @@ export function findLatestJobForProvider(providerId) {
   let latest = null;
   for (const job of store.values()) {
     if (job.providerId !== providerId) continue;
-    if (!latest || new Date(job.createdAt) > new Date(latest.createdAt)) latest = job;
+    if (!latest || new Date(job.createdAt) >= new Date(latest.createdAt)) latest = job;
   }
   return latest;
+}
+
+/** Keep the latest result for each test type, model and key across recent jobs. */
+export function getProbeResultsForProvider(providerId) {
+  evictStale();
+  const results = new Map();
+  for (const job of store.values()) {
+    if (job.providerId !== providerId) continue;
+    for (const task of job.tasks.values()) {
+      const testType = job.testType || "ping";
+      const key = `${testType}::${taskKey(task.connectionId, task.modelId)}`;
+      if (task.state === "done") results.set(key, { ...task, testType });
+      else results.delete(key);
+    }
+  }
+  return [...results.values()];
+}
+
+export function clearProbeResultsForProvider(providerId, modelId) {
+  for (const [id, job] of store) {
+    if (job.providerId !== providerId || job.status === "running") continue;
+    if (!modelId) {
+      store.delete(id);
+    } else {
+      for (const [key, task] of job.tasks) {
+        if (task.modelId === modelId) job.tasks.delete(key);
+      }
+    }
+  }
 }
 
 /**
@@ -110,7 +140,7 @@ export const __test__ = { runPool };
  * than one provider-level "connection OK". Verdicts are persisted as they land, so a
  * closed tab does not lose the run.
  */
-export function startProbeJob({ providerId, providerAlias, connectionIds, models, concurrency }) {
+export function startProbeJob({ providerId, providerAlias, connectionIds, models, concurrency, testType = "ping" }) {
   evictStale();
 
   const modelIds = [...new Set((models || []).map((m) => (typeof m === "string" ? m : m?.id)).filter(Boolean))];
@@ -124,6 +154,7 @@ export function startProbeJob({ providerId, providerAlias, connectionIds, models
     id: randomUUID(),
     providerId,
     providerAlias,
+    testType,
     status: pairs.length === 0 ? "done" : "running",
     concurrency: clampConcurrency(concurrency),
     total: pairs.length,
@@ -137,7 +168,11 @@ export function startProbeJob({ providerId, providerAlias, connectionIds, models
     tasks: new Map(
       pairs.map(({ connectionId, modelId }) => [
         taskKey(connectionId, modelId),
-        { connectionId, modelId, state: "queued", ok: null, error: null, latencyMs: null, status: null, contextLength: null },
+        {
+          connectionId, modelId, testType, state: "queued", ok: null, error: null,
+          latencyMs: null, ttftMs: null, responseDurationMs: null, tokensPerSecond: null,
+          outputTokens: null, tokensEstimated: false, status: null, contextLength: null,
+        },
       ])
     ),
   };
@@ -174,12 +209,20 @@ export function startProbeJob({ providerId, providerAlias, connectionIds, models
         const task = job.tasks.get(key);
         task.state = "testing";
 
-        const { connection, proxy, contexts } = await loadConnection(connectionId);
+        let contexts = {};
         let result;
-        if (!connection) {
-          result = { ok: false, error: "Connection not found", latencyMs: 0, status: null };
-        } else {
-          result = await probeConnectionModel(connection, modelId, { proxy, signal: job.controller.signal });
+        try {
+          const loaded = await loadConnection(connectionId);
+          contexts = loaded.contexts;
+          if (!loaded.connection) {
+            result = { ok: false, error: "Connection not found", latencyMs: 0, status: null };
+          } else {
+            result = await probeConnectionModel(loaded.connection, modelId, {
+              proxy: loaded.proxy, signal: job.controller.signal, testType,
+            });
+          }
+        } catch (error) {
+          result = { ok: false, error: error?.message || "Model test failed", latencyMs: null };
         }
 
         const contextLength = contexts?.[modelId] ?? null;
@@ -187,6 +230,11 @@ export function startProbeJob({ providerId, providerAlias, connectionIds, models
         task.ok = result.ok;
         task.error = result.error || null;
         task.latencyMs = result.latencyMs ?? null;
+        task.ttftMs = result.ttftMs ?? null;
+        task.responseDurationMs = result.responseDurationMs ?? null;
+        task.tokensPerSecond = result.tokensPerSecond ?? null;
+        task.outputTokens = result.outputTokens ?? null;
+        task.tokensEstimated = result.tokensEstimated === true;
         task.status = result.status ?? null;
         task.note = result.note || null;
         task.contextLength = contextLength;

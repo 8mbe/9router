@@ -34,12 +34,22 @@ async function probeDirectModel(model, kind, signal) {
   return probeConnectionModel(connection, resolved.model, resolved.provider === "treg" ? { kind, signal } : { signal });
 }
 
-// POST /api/models/test - Ping a single model using its configured execution mode.
+// POST /api/models/test - Test a model using its configured execution mode.
 export async function POST(request) {
   try {
-    const { model, kind } = await request.json();
+    const { model, kind, testType } = await request.json();
     if (!model) return NextResponse.json({ error: "Model required" }, { status: 400 });
+    if (testType !== undefined && testType !== "ping" && testType !== "essay") {
+      return NextResponse.json({ error: "testType must be ping or essay" }, { status: 400 });
+    }
     const modelKind = kind || "llm";
+    if (testType === "essay" && modelKind !== "llm") {
+      return NextResponse.json({ error: "Essay tests require a language model" }, { status: 400 });
+    }
+    if (testType && modelKind === "llm") {
+      const { runModelTest } = await import("./runModelTest");
+      return NextResponse.json(await runModelTest(model, testType, request.signal));
+    }
     const probe = await probeDirectModel(model, modelKind, request.signal);
     const result = probe || await pingModelByKind(model, modelKind);
     return NextResponse.json(result);

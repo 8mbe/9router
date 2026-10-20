@@ -10,6 +10,7 @@ const DEFAULT_TIMEOUT_MS = 20000;
 export async function probeClaudeCodeModel({
   baseUrl, apiKey, model, authMode = "api-key", proxy, signal,
   maxTokens = 1024, timeoutMs = DEFAULT_TIMEOUT_MS,
+  prompt = "hi", onEvent,
 }) {
   if (proxy?.connectionProxyEnabled || proxy?.vercelRelayUrl) {
     throw new ClaudeCodeBridgeError("Server Claude Code does not support connection proxy/relay settings yet; use direct execution");
@@ -47,7 +48,7 @@ export async function probeClaudeCodeModel({
     if (signal?.aborted) abort();
     if (controller.signal.aborted) throw controller.signal.reason;
     worker = await createClaudeCodeWorker({
-      model, system: "Reply briefly to the user's greeting.", tools: [],
+      model, system: "Answer the user's request directly. Do not use tools.", tools: [],
       upstreamBaseUrl: baseUrl, apiKey, authMode, maxTokens,
       runtimeHop: claudeCodeRuntimeHop(), signal: controller.signal,
       waitForToolResult: async () => { throw new ClaudeCodeBridgeError("Model check cannot execute tools", 502); },
@@ -57,6 +58,7 @@ export async function probeClaudeCodeModel({
           if (event.type === "content_block_start" && event.content_block?.type === CLAUDE_BLOCK.TOOL_USE) {
             throw new ClaudeCodeBridgeError("Model check cannot execute tools", 502);
           }
+          onEvent?.(event);
           accumulator.add(event);
           if (event.type === "message_stop") messageStopped = true;
         } catch (error) { reject(error); }
@@ -71,7 +73,7 @@ export async function probeClaudeCodeModel({
       },
     });
     if (controller.signal.aborted) throw controller.signal.reason;
-    worker.sendUserMessage("hi");
+    worker.sendUserMessage(prompt);
     return Response.json(await completed);
   } finally {
     clearTimeout(timer);

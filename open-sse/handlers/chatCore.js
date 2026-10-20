@@ -66,7 +66,7 @@ export function stripContinuityFields(body) {
   return body;
 }
 
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, runtimeOwnerId, runtimeConversationId, clientMode }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, ccFilterNaming, rtkEnabled, headroomEnabled, headroomUrl, headroomCompressUserMessages, headroomTimeoutMs, cavemanEnabled, cavemanLevel, ponytailEnabled, ponytailLevel, pxpipeEnabled, pxpipeMinChars, pxpipeTimeoutMs, pxpipeTransform, onPxpipeEvent, sourceFormatOverride, providerThinking, providerOverrides, runtimeOwnerId, runtimeConversationId, clientMode, signal }) {
   const { provider, model } = modelInfo;
   const serviceKinds = PROVIDER_MEDIA[provider]?.serviceKinds;
   if (serviceKinds && !serviceKinds.includes("llm")) {
@@ -376,6 +376,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     onError: () => trackPendingRequest(model, provider, connectionId, false),
     log, provider, model, reqTag
   });
+  const executionSignal = signal ? AbortSignal.any([signal, streamController.signal]) : streamController.signal;
 
   const proxyOptions = {
     connectionProxyEnabled: credentials?.providerSpecificData?.connectionProxyEnabled === true,
@@ -427,7 +428,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       credentials,
       providerSessionId: sessionSeed,
       clientTool,
-      signal: streamController.signal,
+      signal: executionSignal,
       log,
       proxyOptions,
       providerOverrides,
@@ -497,7 +498,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             credentials,
             providerSessionId: sessionSeed,
             clientTool,
-            signal: streamController.signal,
+            signal: executionSignal,
             log,
             proxyOptions,
             providerOverrides,

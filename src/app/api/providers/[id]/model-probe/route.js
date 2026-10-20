@@ -5,6 +5,7 @@ import { invalidateProbeHints } from "@/lib/modelProbe/routingHints";
 import { getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import {
   startProbeJob, getJob, cancelJob, serializeJob, findLatestJobForProvider,
+  getProbeResultsForProvider, clearProbeResultsForProvider,
   clampConcurrency, MAX_CONCURRENCY, DEFAULT_CONCURRENCY,
 } from "@/lib/modelProbe/jobs";
 
@@ -41,7 +42,9 @@ export async function GET(request, { params }) {
     const jobId = searchParams.get("jobId");
     if (jobId) {
       const job = getJob(jobId);
-      if (!job) return NextResponse.json({ error: "Job not found or expired" }, { status: 404 });
+      if (!job || job.providerId !== resolved.providerId) {
+        return NextResponse.json({ error: "Job not found or expired" }, { status: 404 });
+      }
       return NextResponse.json({ job: serializeJob(job) });
     }
 
@@ -55,6 +58,7 @@ export async function GET(request, { params }) {
       providerId: resolved.providerId,
       providerAlias: resolved.providerAlias,
       probes,
+      results: getProbeResultsForProvider(resolved.providerId),
       job: serializeJob(findLatestJobForProvider(resolved.providerId)),
       maxConcurrency: MAX_CONCURRENCY,
       defaultConcurrency: DEFAULT_CONCURRENCY,
@@ -67,7 +71,7 @@ export async function GET(request, { params }) {
 
 /**
  * POST /api/providers/[id]/model-probe
- * Body: { models?: string[], connectionIds?: string[], concurrency?: number }
+ * Body: { models?: string[], connectionIds?: string[], concurrency?: number, testType?: "ping" | "essay" }
  * Starts a background run and returns immediately with the job.
  */
 export async function POST(request, { params }) {
@@ -78,6 +82,10 @@ export async function POST(request, { params }) {
 
     const body = await request.json().catch(() => ({}));
     const { providerId, providerAlias } = resolved;
+    const testType = body.testType ?? "ping";
+    if (testType !== "ping" && testType !== "essay") {
+      return NextResponse.json({ error: "Test type must be ping or essay" }, { status: 400 });
+    }
 
     const allConnections = await getProviderConnections({ provider: providerId });
     const requested = Array.isArray(body.connectionIds) && body.connectionIds.length > 0
@@ -118,6 +126,7 @@ export async function POST(request, { params }) {
       connectionIds: connections.map((c) => c.id),
       models: modelIds,
       concurrency: clampConcurrency(body.concurrency ?? DEFAULT_CONCURRENCY),
+      testType,
     });
 
     return NextResponse.json({ job: serializeJob(job) });
@@ -142,6 +151,10 @@ export async function DELETE(request, { params }) {
     const { searchParams } = new URL(request.url);
     const jobId = searchParams.get("jobId");
     if (jobId) {
+      const job = getJob(jobId);
+      if (!job || job.providerId !== resolved.providerId) {
+        return NextResponse.json({ error: "Job not found or expired" }, { status: 404 });
+      }
       return NextResponse.json({ cancelled: cancelJob(jobId) });
     }
 
@@ -152,6 +165,7 @@ export async function DELETE(request, { params }) {
     // Routing reads verdicts through a cache; drop it so the next request does not
     // keep steering on results the user just deleted.
     invalidateProbeHints();
+    clearProbeResultsForProvider(resolved.providerId, searchParams.get("modelId") || undefined);
     return NextResponse.json({ removed });
   } catch (error) {
     console.log("Error clearing model probes:", error);

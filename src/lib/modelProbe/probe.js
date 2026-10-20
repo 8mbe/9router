@@ -6,6 +6,7 @@ import { CLAUDE_CODE } from "open-sse/config/claudeCodeConstants.js";
 import { TREG_CONFIG, TREG_ROUTES, TREG_CATALOG_PLATFORMS } from "open-sse/config/treg.js";
 import { buildTregHeaders } from "open-sse/handlers/treg/client.js";
 import { extractContextLength } from "./contextLength";
+import { consumeProbeStream, createStreamMetrics, ESSAY_PROMPT, ESSAY_TIMEOUT_MS, PING_PROMPT } from "./streamMetrics";
 
 const DEFAULT_TIMEOUT_MS = 20000;
 
@@ -155,7 +156,12 @@ async function probeTregModel(connection, modelId, options = {}) {
   const start = Date.now();
   const result = (ok, error, status, note = null) => ({
     ok, error, status, note, latencyMs: Date.now() - start,
+    ...(options.testType ? { testType: options.testType } : {}),
   });
+  if (options.testType === "essay") return {
+    ...result(false, "Essay tests require a chat model", 400),
+    ...createStreamMetrics({ startTime: start }).snapshot(),
+  };
   const route = Object.hasOwn(TREG_ROUTES, modelId) ? TREG_ROUTES[modelId] : null;
   if (!route) return result(false, `Unsupported Treg model: ${modelId}`, 400);
   if (options.kind && options.kind !== route.kind) {
@@ -217,13 +223,23 @@ export async function probeModelEndpoint({
   proxy,
   signal,
   kind,
+  testType,
 }) {
   if (provider === "treg") {
-    return probeTregModel({ provider, apiKey, providerSpecificData }, model, { proxy, signal, kind });
+    return probeTregModel({ provider, apiKey, providerSpecificData }, model, { proxy, signal, kind, testType });
   }
   const start = Date.now();
-  if (!baseUrl) return { ok: false, error: "No base URL", latencyMs: 0, status: null };
-  if (!model) return { ok: false, error: "No model id", latencyMs: 0, status: null };
+  const essay = testType === "essay";
+  const metrics = essay ? createStreamMetrics({ startTime: start }) : null;
+  const extra = () => ({ ...(testType ? { testType } : {}), ...metrics?.snapshot() });
+  if (!baseUrl) return { ok: false, error: "No base URL", latencyMs: 0, status: null, ...extra() };
+  if (!model) return { ok: false, error: "No model id", latencyMs: 0, status: null, ...extra() };
+
+  const timeoutMs = essay ? ESSAY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const probeSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const prompt = essay ? ESSAY_PROMPT : testType === "ping" ? PING_PROMPT : "hi";
+  const maxTokens = essay ? 2048 : PROBE_MAX_TOKENS;
 
   const isAnthropic = format === "claude";
   const url = completionUrl(baseUrl, format);
@@ -231,12 +247,14 @@ export async function probeModelEndpoint({
 
   try {
     let res;
+    let native = false;
     if (isAnthropic && isAnthropicCompatibleProvider(provider) && providerSpecificData?.executionMode === CLAUDE_CODE.executionMode
       && providerSpecificData?.anonymizeRequests !== true && providerSpecificData?.customApiSessionPinning !== true) {
       const { probeClaudeCodeModel } = await import("./claudeCode");
+      native = true;
       res = await probeClaudeCodeModel({
         baseUrl, apiKey, model, authMode: providerSpecificData.authMode || "api-key",
-        proxy, signal, maxTokens: PROBE_MAX_TOKENS,
+        proxy, signal: probeSignal, maxTokens, timeoutMs, prompt, onEvent: metrics?.add,
       });
     } else if (isAnthropic) {
       res = await probeFetch(url, {
@@ -250,10 +268,11 @@ export async function probeModelEndpoint({
         },
         body: JSON.stringify({
           model,
-          max_tokens: PROBE_MAX_TOKENS,
-          messages: [{ role: "user", content: "hi" }],
+          max_tokens: maxTokens,
+          ...(essay ? { stream: true } : {}),
+          messages: [{ role: "user", content: prompt }],
         }),
-        signal,
+        signal: probeSignal,
       }, proxy, connection);
     } else {
       const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
@@ -266,15 +285,19 @@ export async function probeModelEndpoint({
         headers,
         body: JSON.stringify({
           model,
-          max_tokens: PROBE_MAX_TOKENS,
-          stream: false,
-          messages: [{ role: "user", content: "hi" }],
+          max_tokens: maxTokens,
+          stream: essay,
+          ...(essay ? { stream_options: { include_usage: true } } : {}),
+          messages: [{ role: "user", content: prompt }],
         }),
-        signal,
+        signal: probeSignal,
       }, proxy, connection);
     }
 
-    const latencyMs = Date.now() - start;
+    if (essay && !native) {
+      const result = await consumeProbeStream(res, { startTime: start, signal: probeSignal });
+      return { ...result, testType, status: res.status, latencyMs: Date.now() - start };
+    }
     const rawText = await res.text().catch(() => "");
     const parsed = parseBody(rawText);
     const verdict = isAnthropic
@@ -286,16 +309,22 @@ export async function probeModelEndpoint({
       error: verdict.ok ? null : verdict.error,
       note: verdict.note || null,
       status: res.status,
-      latencyMs,
+      latencyMs: Date.now() - start,
+      ...extra(),
+      ...(essay && native && verdict.ok ? metrics.result() : {}),
     };
   } catch (error) {
     const latencyMs = Date.now() - start;
     const aborted = error?.name === "AbortError" || error?.name === "TimeoutError";
+    const timedOut = error?.name === "TimeoutError" || probeSignal.reason?.name === "TimeoutError";
     return {
       ok: false,
-      error: aborted ? `Timed out after ${DEFAULT_TIMEOUT_MS}ms` : describeFetchError(error),
+      error: timedOut
+        ? (deadline.aborted ? `Timed out after ${timeoutMs}ms` : "Model test timed out")
+        : aborted ? "Model test cancelled" : describeFetchError(error),
       status: error?.statusCode ?? null,
       latencyMs,
+      ...extra(),
     };
   }
 }
@@ -313,7 +342,11 @@ export async function probeConnectionModel(connection, modelId, options = {}) {
   if (connection?.provider === "treg") return probeTregModel(connection, modelId, options);
   const baseUrl = connection?.providerSpecificData?.baseUrl;
   if (!baseUrl) {
-    return { ok: false, error: "Connection has no base URL", latencyMs: 0, status: null };
+    return {
+      ok: false, error: "Connection has no base URL", latencyMs: 0, status: null,
+      ...(options.testType ? { testType: options.testType } : {}),
+      ...(options.testType === "essay" ? createStreamMetrics().snapshot() : {}),
+    };
   }
 
   const effectiveProxy = options.proxy !== undefined
@@ -330,6 +363,7 @@ export async function probeConnectionModel(connection, modelId, options = {}) {
     providerSpecificData: connection.providerSpecificData,
     proxy: effectiveProxy,
     signal: options.signal,
+    testType: options.testType,
   });
 }
 
