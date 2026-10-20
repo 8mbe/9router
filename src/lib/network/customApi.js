@@ -8,8 +8,8 @@ import { isCustomApiSessionPinningEnabled } from "open-sse/utils/customApiSessio
 const saltKey = Symbol.for("9router.customApiValidationSalt");
 const validationSalt = globalThis[saltKey] ||= randomBytes(32);
 
-/** Fetch a custom API diagnostic and finish its body before releasing the lease. */
-export async function fetchCustomApiDiagnostic(connection, url, options = {}, proxy = null) {
+/** Buffer status-only diagnostics; streaming callers consume or cancel the leased body. */
+export async function fetchCustomApiDiagnostic(connection, url, options = {}, proxy = null, { streamResponse = false } = {}) {
   const data = connection.providerSpecificData || {};
   const connectionId = connection.connectionId || connection.id || `validation-${createHmac("sha256", validationSalt)
     .update(JSON.stringify([connection.provider, connection.apiKey || "", data.baseUrl || ""]))
@@ -22,7 +22,7 @@ export async function fetchCustomApiDiagnostic(connection, url, options = {}, pr
     connectionId,
     providerSpecificData: { ...data, ...effectiveProxy },
   }, url, options, proxyOptions);
-  if (!isCustomApiSessionPinningEnabled(connection.provider, data)) return response;
+  if (streamResponse || !isCustomApiSessionPinningEnabled(connection.provider, data)) return response;
   // Diagnostic callers often inspect only status. Buffering here means an
   // ignored error/models response cannot leave the account leased forever.
   const body = response.body ? await response.arrayBuffer() : null;

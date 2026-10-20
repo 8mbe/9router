@@ -33,6 +33,52 @@ function streamFixture(chunks) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("streaming model test metrics", () => {
+  it("does not count parser time as generation time when the whole response arrives in one read", async () => {
+    const fixture = streamFixture([{
+      at: 1200,
+      data: encode(token("A small ")) + encode(token("essay with ")) + encode(token("several deltas."))
+        + encode(finish) + encode({ usage: { completion_tokens: 644 } }) + encode("[DONE]"),
+    }]);
+    let time = 1200;
+    const now = vi.fn(() => time++);
+
+    expect(await consumeProbeStream(fixture.response, { startTime: 1000, now })).toEqual({
+      ok: true, error: null, ttftMs: 200, responseDurationMs: null,
+      outputTokens: 644, tokensPerSecond: null, tokensEstimated: false,
+      note: "Output arrived together; first-to-last-token timing and speed are unavailable.",
+    });
+    expect(now).toHaveBeenCalledOnce();
+    expect(fixture.reader.read).toHaveBeenCalledOnce();
+  });
+
+  it("uses chunk arrival times for multiple output events and excludes later usage", async () => {
+    const fixture = streamFixture([
+      { at: 1100, data: encode(token("A ")) + encode(token("small ")) },
+      { at: 1600, data: encode(token("essay ")) + encode(token("ends.")) + encode(finish) },
+      { at: 2500, data: encode({ usage: { completion_tokens: 30 } }) + encode("[DONE]") },
+    ]);
+    const now = vi.fn().mockReturnValueOnce(1100).mockReturnValueOnce(1600).mockReturnValueOnce(2500);
+
+    expect(await consumeProbeStream(fixture.response, { startTime: 1000, now })).toEqual({
+      ok: true, error: null, ttftMs: 100, responseDurationMs: 500,
+      outputTokens: 30, tokensPerSecond: 60, tokensEstimated: false,
+    });
+    expect(now).toHaveBeenCalledTimes(3);
+  });
+
+  it("timestamps a final event without a delimiter at its payload arrival, before delayed EOF", async () => {
+    const fixture = streamFixture([
+      { at: 1100, data: encode(token("An ")) },
+      { at: 1500, data: encode({ choices: [{ delta: { content: "essay." }, finish_reason: "stop" }] }).trimEnd() },
+    ]);
+    const now = vi.fn().mockReturnValueOnce(1100).mockReturnValueOnce(1500).mockReturnValueOnce(4000);
+
+    expect(await consumeProbeStream(fixture.response, { startTime: 1000, now })).toMatchObject({
+      ok: true, ttftMs: 100, responseDurationMs: 400, outputTokens: 3, tokensPerSecond: 7.5,
+    });
+    expect(now).toHaveBeenCalledTimes(3);
+  });
+
   it("measures output arrival and excludes role, finish, usage and stream teardown time", async () => {
     const fixture = streamFixture([
       { at: 1100, data: encode({ choices: [{ delta: { role: "assistant", content: "" } }] }) },
@@ -53,7 +99,10 @@ describe("streaming model test metrics", () => {
     const raw = new TextEncoder().encode(`: keepalive\r\n\r\nevent: message\r\ndata: {"choices": [\r\ndata: {"delta": {"content": "café"}}]}\r\n\r\n${encode(finish)}`);
     const fixture = streamFixture([...raw].map((byte, index) => ({ at: 1100 + index, data: Uint8Array.of(byte) })));
     const result = await consumeProbeStream(fixture.response, { startTime: 1000, now: fixture.now });
-    expect(result).toMatchObject({ ok: true, outputTokens: 1, tokensEstimated: true, responseDurationMs: 0, tokensPerSecond: null });
+    expect(result).toMatchObject({
+      ok: true, outputTokens: 1, tokensEstimated: true, responseDurationMs: null, tokensPerSecond: null,
+      note: "Output arrived together; first-to-last-token timing and speed are unavailable.",
+    });
     expect(result.ttftMs).toBeGreaterThan(100);
   });
 

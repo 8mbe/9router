@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), resolveProxy: vi.fn() }));
 vi.mock("open-sse/utils/proxyFetch.js", () => ({ proxyAwareFetch: mocks.fetch }));
 vi.mock("@/lib/network/connectionProxy", () => ({ resolveConnectionProxyConfig: mocks.resolveProxy }));
 
 import { fetchCustomApiDiagnostic } from "@/lib/network/customApi";
+import { probeConnectionModel } from "@/lib/modelProbe/probe";
 import { fetchCustomApi } from "open-sse/utils/customApiFetch.js";
 import { clearCustomApiSessionStore, getPinnedCustomApiConnectionId, isCustomApiConnectionDraining, markCustomApiSessionDraining } from "open-sse/utils/customApiSession.js";
 
@@ -25,6 +26,8 @@ beforeEach(() => {
   mocks.resolveProxy.mockResolvedValue(proxy);
   mocks.fetch.mockImplementation(async () => new Response('{"data":[{"id":"model-a"}]}'));
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("custom API diagnostic sessions", () => {
   it("uses the inference session for a saved account and resolves its pool", async () => {
@@ -73,5 +76,61 @@ describe("custom API diagnostic sessions", () => {
     await expect(fetchCustomApiDiagnostic(connection, url)).rejects.toThrow("upstream failed");
     expect(getPinnedCustomApiConnectionId(provider)).toBeNull();
     expect(isCustomApiConnectionDraining(provider, connection.id)).toBe(false);
+  });
+
+  it("returns streaming diagnostics before output and releases the session on cancellation", async () => {
+    const pull = vi.fn();
+    const cancel = vi.fn();
+    mocks.fetch.mockResolvedValue(new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+      headers: { "content-type": "text/event-stream" },
+    }));
+
+    const diagnostic = await fetchCustomApiDiagnostic(connection, url, {}, proxy, { streamResponse: true });
+    expect(pull).not.toHaveBeenCalled();
+    markCustomApiSessionDraining(provider, connection.id);
+    expect(isCustomApiConnectionDraining(provider, connection.id)).toBe(true);
+    await diagnostic.body.cancel();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(isCustomApiConnectionDraining(provider, connection.id)).toBe(false);
+  });
+
+  it("measures pinned essay output as it arrives and keeps the lease until terminal cancellation finishes", async () => {
+    let time = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    const event = (value) => new TextEncoder().encode(`data: ${typeof value === "string" ? value : JSON.stringify(value)}\n\n`);
+    const chunks = [
+      [1100, { choices: [{ delta: { role: "assistant" } }] }],
+      [1200, { choices: [{ delta: { content: "Small " } }] }],
+      [1600, { choices: [{ delta: { content: "essay." } }] }],
+      [1900, { choices: [{ delta: {}, finish_reason: "stop" }], usage: { completion_tokens: 20 } }],
+      [2200, "[DONE]"],
+    ];
+    let signalCancellation;
+    const cancellationStarted = new Promise((resolve) => { signalCancellation = resolve; });
+    let releaseCancellation;
+    const cancellationFinished = new Promise((resolve) => { releaseCancellation = resolve; });
+    const cancel = vi.fn(() => { signalCancellation(); return cancellationFinished; });
+    mocks.fetch.mockResolvedValue(new Response(new ReadableStream({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (!chunk) return; // The gateway leaves the socket open after [DONE].
+        time = chunk[0];
+        if (chunk[1] === "[DONE]") markCustomApiSessionDraining(provider, connection.id);
+        controller.enqueue(event(chunk[1]));
+      },
+      cancel,
+    }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }));
+
+    const pending = probeConnectionModel({
+      ...connection, providerSpecificData: { ...connection.providerSpecificData, baseUrl: "https://custom.test/v1" },
+    }, "essay-model", { testType: "essay", proxy });
+    await cancellationStarted;
+    expect(isCustomApiConnectionDraining(provider, connection.id)).toBe(true);
+    releaseCancellation();
+    expect(await pending).toMatchObject({
+      ok: true, ttftMs: 200, responseDurationMs: 400, tokensPerSecond: 50, outputTokens: 20,
+    });
+    expect(isCustomApiConnectionDraining(provider, connection.id)).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

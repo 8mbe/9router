@@ -34,20 +34,20 @@ function describeFetchError(error) {
   return detail && detail !== message ? `${message} (${detail})` : message;
 }
 
-async function probeFetch(url, options, effectiveProxy, connection = null) {
+async function probeFetch(url, options, effectiveProxy, connection = null, diagnosticOptions) {
   if (!options.signal) options.signal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   try {
-    return await probeFetchOnce(url, options, effectiveProxy, connection);
+    return await probeFetchOnce(url, options, effectiveProxy, connection, diagnosticOptions);
   } catch (error) {
     if (options.signal.aborted || !isTransientSocketError(error)) throw error;
     // One retry opens a fresh connection; the shared signal keeps the overall deadline.
-    return probeFetchOnce(url, options, effectiveProxy, connection);
+    return probeFetchOnce(url, options, effectiveProxy, connection, diagnosticOptions);
   }
 }
 
-async function probeFetchOnce(url, options, effectiveProxy, connection) {
+async function probeFetchOnce(url, options, effectiveProxy, connection, diagnosticOptions) {
   if (connection && isCustomApiProvider(connection.provider)) {
-    return fetchCustomApiDiagnostic(connection, url, options, effectiveProxy);
+    return fetchCustomApiDiagnostic(connection, url, options, effectiveProxy, diagnosticOptions);
   }
   if (effectiveProxy?.vercelRelayUrl) {
     const { proxyAwareFetch } = await import("open-sse/utils/proxyFetch.js");
@@ -273,7 +273,7 @@ export async function probeModelEndpoint({
           messages: [{ role: "user", content: prompt }],
         }),
         signal: probeSignal,
-      }, proxy, connection);
+      }, proxy, connection, { streamResponse: essay });
     } else {
       const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
       if (apiKey) {
@@ -291,7 +291,7 @@ export async function probeModelEndpoint({
           messages: [{ role: "user", content: prompt }],
         }),
         signal: probeSignal,
-      }, proxy, connection);
+      }, proxy, connection, { streamResponse: essay });
     }
 
     if (essay && !native) {

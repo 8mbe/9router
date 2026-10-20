@@ -32,15 +32,15 @@ export function createStreamMetrics({ startTime = Date.now(), now = Date.now } =
   let terminal = false;
   let error = null;
 
-  function addText(text) {
+  function addText(text, arrivalTime) {
     if (!text) return;
-    const time = now();
+    const time = arrivalTime ?? now();
     if (firstTokenTime === null) firstTokenTime = time;
     lastTokenTime = time;
     output += text;
   }
 
-  function add(event) {
+  function add(event, arrivalTime) {
     if (terminal) return;
     if (event === "[DONE]") { completed = true; terminal = true; return; }
     if (!event || typeof event !== "object") return;
@@ -56,17 +56,17 @@ export function createStreamMetrics({ startTime = Date.now(), now = Date.now } =
     if (choice) {
       const delta = choice.delta;
       if (delta) {
-        addText(textContent(delta.content));
-        addText(textContent(delta.reasoning_content || delta.reasoning || delta.thinking || delta.thinking_content));
-      } else if (typeof choice.text === "string") addText(choice.text);
+        addText(textContent(delta.content), arrivalTime);
+        addText(textContent(delta.reasoning_content || delta.reasoning || delta.thinking || delta.thinking_content), arrivalTime);
+      } else if (typeof choice.text === "string") addText(choice.text, arrivalTime);
       if (choice.finish_reason != null) completed = true;
     }
     if (event.type === "content_block_start") {
-      addText(textContent(event.content_block?.text || event.content_block?.thinking));
+      addText(textContent(event.content_block?.text || event.content_block?.thinking), arrivalTime);
     } else if (event.type === "content_block_delta") {
-      addText(textContent(event.delta?.text || event.delta?.thinking));
+      addText(textContent(event.delta?.text || event.delta?.thinking), arrivalTime);
     } else if (event.type === "response.output_text.delta" || event.type === "response.reasoning_text.delta") {
-      addText(textContent(event.delta));
+      addText(textContent(event.delta), arrivalTime);
     }
     if (event.type === "message_stop" || event.type === "response.completed") { completed = true; terminal = true; }
     if (event.type === "response.failed" || event.type === "response.incomplete") {
@@ -130,24 +130,34 @@ export async function consumeProbeStream(response, { startTime = Date.now(), now
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let lastArrivalTime = null;
   let invalidEvent = false;
   const aborted = () => reader.cancel(signal.reason).catch(() => {});
   signal?.addEventListener("abort", aborted, { once: true });
 
-  function dispatch(raw) {
+  function streamResult(failure = null) {
+    const result = metrics.result(failure);
+    if (result.ok && result.outputTokens > 0 && result.responseDurationMs === 0) {
+      result.responseDurationMs = null;
+      result.note = "Output arrived together; first-to-last-token timing and speed are unavailable.";
+    }
+    return result;
+  }
+
+  function dispatch(raw, arrivalTime) {
     const data = raw.split(/\r\n|\n|\r/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).replace(/^ /, ""))
       .join("\n");
     if (!data.trim()) return;
-    if (data.trim() === "[DONE]") { metrics.add("[DONE]"); return; }
-    try { metrics.add(JSON.parse(data)); } catch { invalidEvent = true; }
+    if (data.trim() === "[DONE]") { metrics.add("[DONE]", arrivalTime); return; }
+    try { metrics.add(JSON.parse(data), arrivalTime); } catch { invalidEvent = true; }
   }
 
-  function drain() {
+  function drain(arrivalTime) {
     let boundary;
     while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
-      dispatch(buffer.slice(0, boundary.index));
+      dispatch(buffer.slice(0, boundary.index), arrivalTime);
       buffer = buffer.slice(boundary.index + boundary[0].length);
     }
   }
@@ -156,22 +166,25 @@ export async function consumeProbeStream(response, { startTime = Date.now(), now
     if (signal?.aborted) throw signal.reason || new DOMException("Model test cancelled", "AbortError");
     for (;;) {
       const { done, value } = await reader.read();
+      const arrivalTime = now();
       if (signal?.aborted) throw signal.reason || new DOMException("Model test cancelled", "AbortError");
       if (done) break;
+      lastArrivalTime = arrivalTime;
       buffer += decoder.decode(value, { stream: true });
-      drain();
+      // All events in a network chunk arrived together. Parser time is not generation time.
+      drain(arrivalTime);
       // Usage can follow finish_reason, but [DONE]/message_stop close the protocol.
       // Some gateways leave the HTTP body open after this terminal event.
       if (metrics.isTerminal()) break;
     }
     buffer += decoder.decode();
-    drain();
-    if (buffer.trim()) dispatch(buffer);
-    return metrics.result(invalidEvent ? "Provider returned an invalid streaming event" : null);
+    drain(lastArrivalTime);
+    if (buffer.trim()) dispatch(buffer, lastArrivalTime);
+    return streamResult(invalidEvent ? "Provider returned an invalid streaming event" : null);
   } catch (error) {
     const cause = error?.cause;
     const detail = [cause?.code, cause?.message].filter(Boolean).join(": ");
-    return metrics.result(`${errorMessage(error, "Provider stream failed")}${detail ? ` (${detail})` : ""}`);
+    return streamResult(`${errorMessage(error, "Provider stream failed")}${detail ? ` (${detail})` : ""}`);
   } finally {
     signal?.removeEventListener("abort", aborted);
     await reader.cancel().catch(() => {});
