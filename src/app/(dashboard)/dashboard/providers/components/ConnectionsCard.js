@@ -6,6 +6,7 @@ import PropTypes from "prop-types";
 import { Card, Badge, Button, Toggle, EditConnectionModal, ConfirmModal } from "@/shared/components";
 import { AI_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import AddApiKeyModal from "../[id]/AddApiKeyModal";
+import WebLoginButton from "./WebLoginButton";
 
 // ── CooldownTimer ──────────────────────────────────────────────
 function CooldownTimer({ until }) {
@@ -197,7 +198,7 @@ ConnectionRow.propTypes = {
 
 // ── ConnectionsCard ────────────────────────────────────────────
 // Self-contained card: fetches, displays and manages all connections for a provider.
-export default function ConnectionsCard({ providerId, isOAuth }) {
+export default function ConnectionsCard({ providerId, isOAuth, loginProviderId = null }) {
   const [connections, setConnections] = useState([]);
   const [proxyPools, setProxyPools] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -350,6 +351,9 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
             <div className="flex flex-wrap gap-2">
               {canBulkAdd && <Button size="sm" icon="playlist_add" variant="secondary" className="min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("bulk")}>Bulk Add</Button>}
               <Button size="sm" icon="add" className="min-h-11 bg-brand-700 hover:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("single")}>Add Connection</Button>
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
             </div>
           </div>
         ) : (
@@ -375,6 +379,9 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
             <div className="mt-4 flex flex-wrap gap-2">
               <Button size="sm" icon="add" className="min-h-11 bg-brand-700 hover:bg-brand-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("single")}>Add</Button>
               {canBulkAdd && <Button size="sm" icon="playlist_add" variant="secondary" className="min-h-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text-main" onClick={() => openAddModal("bulk")}>Bulk Add</Button>}
+              {loginProviderId && (
+                <WebLoginButton providerId={loginProviderId} onConnected={fetch_} />
+              )}
             </div>
           </>
         )}
@@ -419,4 +426,5 @@ export default function ConnectionsCard({ providerId, isOAuth }) {
 ConnectionsCard.propTypes = {
   providerId: PropTypes.string.isRequired,
   isOAuth: PropTypes.bool,
+  loginProviderId: PropTypes.string,
 };

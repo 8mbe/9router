@@ -12,7 +12,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("Codex GPT-6 Sol/Luna transport", () => {
   it.each([
-    ["gpt-6.1-sol", 1050000],
+    ["gpt-6.1-sol", 272000],
     ["gpt-6-sol", 272000],
     ["gpt-6-luna", 272000],
   ])("lists %s with Codex capabilities", (model, contextWindow) => {
