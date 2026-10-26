@@ -4,6 +4,29 @@
 - **Custom APIs**: add optional request anonymization and account/proxy session pinning to connection Add, Bulk Add and Edit. Bright Data sessions use `-session-ID-const`; other HTTP/HTTPS proxies can use a `{session}` credential template. Unavailable accounts stop receiving new requests while their existing streams drain, and pinned requests never fall back to a direct connection. Authentication, request content and upstream conversation references remain visible. See [setup and limits](docs/custom-api-privacy.md).
 - **Auto Combo**: a bare model name (`gpt-5.6-sol`, not `provider/gpt-5.6-sol`) is now routed across **every** connected provider that carries that model, falling back provider by provider until one answers — no combo has to be defined by hand. Provider spellings are matched fuzzily, in tiers, so `gpt-5-6-sol`, `openai/gpt-5.6-sol`, `gpt-5.6-sol-latest` and `gpt-5-6-solm` all join the same combo while an exact match is always tried first. A member that fails is benched from auto-combos on an escalating cooldown (2m → 6h, cleared by one success), so later requests skip a dead provider instead of paying its timeout; benching never affects explicit `provider/model` requests, aliases or user-defined combos. User-defined combos and model aliases with the same name still win outright. Toggles under Profile → Fallback (`Auto Combo`, `Loose Model Matching`); inspect or clear benched members via `GET`/`DELETE /api/auto-combo`.
 
+# v0.5.111 (2026-10-26)
+
+## Features
+- **Ollama**: add `ollama-local` TTS provider serving the Phonon family (15 tags, 38 preset voices), normalizing the requested format to wav/pcm, falling back to an installed tag and the `default` voice, and wrapping raw PCM in a WAV header so the dashboard can preview it
+- **Ollama**: add `ollama-local` embedding adapter for `/v1/embeddings`, normalizing a saved host that carries a `/v1` or `/v1/embeddings` suffix and sending a bearer token only when an API key is configured; catalog the 14 embedding model families with their dimensions
+- **Providers**: add Runcrate (`rc`) — OpenAI-compatible upstream serving DeepSeek, GLM, Qwen and gpt-oss models, validated through `GET /api/v1/billing/balance` because the public `/v1/models` answers 200 for any key
+- **CommandCode**: add Kimi K3.1 Pro to the catalog with the upstream id kept verbatim, riding the existing NDJSON `/alpha/generate` lane
+- **OpenCode Go**: add Kimi K3.1 Pro on the chat lane with vision/video input, 1,048,576 context, 131,072 max output and dedicated K3 pricing
+
+## Fixes
+- **CLI Tools**: stop the Pi card from resetting every `contextWindow`/`maxTokens` in `~/.pi/agent/models.json` on Apply, add per-model context-window and max-output selectors, and sanitize corrupt cap values instead of writing them back
+- **CLI Tools**: treat `name === id` as unset on Apply so a hand-edited Pi model label is no longer overwritten
+- **OpenCode**: normalize a caller tool that collides with the OpenCode fingerprint in place (keeping the caller's name and adopting the fingerprint schema) instead of aliasing it to `<name>_client` and restoring it on the response (#4971, #5011)
+- **OpenCode Free**: restore the free tier by sending the TLS ClientHello the upstream accepts (via optional `wreq-js`, fail-open to native fetch), minting session ids from the current time instead of a sha256 digest, and always pairing the CLI `<env>` system marker with a declared tool list
+- **OpenCode Free**: cap the published context window of `oc/deepseek-v4.1-flash-free` at 330k so clients compact before the backend's limit (#5097)
+- **Translator**: convert `image_url` parts inside `role:"tool"` messages to Claude image blocks instead of forwarding them verbatim and failing with a 400 (#5125)
+- **Headroom**: compress only text leaves and copy them back into the original fields, preserving native Claude documents, tool-use ids/inputs, tool results, signed thinking, citations and cache controls (#4670)
+- **DeepSeek**: send `deepseek-flash` upstream for `deepseek-v4.1-flash`, whose catalog id the API rejects (#4940)
+- **Claude**: keep adaptive thinking for Haiku 5.5 and downgrade to `enabled/10000` only below major version 5 (#5183)
+- **Thinking**: keep `reasoning_effort: max` for GPT-5.6 / GPT-6 served through OpenAI Compatible nodes instead of clamping it to `xhigh` (#5186)
+- **Codex Image**: drive the `image_generation` tool call from `gpt-6-sol` instead of the legacy `gpt-5.6-terra` host, and add `cx/gpt-6-sol-image`; drop the `gpt-5.6-{sol,terra,luna}-image` aliases they supersede
+- **Capabilities**: match `*gpt-6*image*` before the generic `gpt-6` family pattern so `gpt-6-sol-image` resolves as an image model instead of inheriting the chat caps (vision/reasoning/1.05M window) and losing `imageOutput`
+
 # v0.5.109 (2026-10-23)
 
 ## Features

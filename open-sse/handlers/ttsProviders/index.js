@@ -10,6 +10,7 @@ import xiaomiMimo from "./xiaomi-mimo.js";
 import treg from "./treg.js";
 import selfhostedTts from "./selfhostedTts.js";
 import openaiCompatNode from "./openaiCompatNode.js";
+import ollamaLocal from "./ollamaLocal.js";
 import { FORMAT_HANDLERS } from "./genericFormats.js";
 import { parseModelVoice } from "./_base.js";
 
@@ -25,6 +26,7 @@ const SPECIAL_ADAPTERS = {
   "xiaomi-mimo": xiaomiMimo,
   treg,
   "selfhosted-tts": selfhostedTts,
+  "ollama-local": ollamaLocal,
 };
 
 export function getTtsAdapter(provider) {
