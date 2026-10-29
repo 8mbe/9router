@@ -1,6 +1,8 @@
 import { HTTP_STATUS, RETRY_CONFIG, DEFAULT_RETRY_CONFIG, resolveRetryEntry, FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { shouldRefreshCredentials } from "../services/oauthCredentialManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
+import { fetchCustomApi } from "../utils/customApiFetch.js";
+import { isCustomApiProvider, sanitizeCustomApiRequest } from "../utils/customApiPrivacy.js";
 import { dbg } from "../utils/debugLog.js";
 import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE } from "../providers/shared.js";
 import { resolveOpenAICompatibleApiType } from "../services/provider.js";
@@ -120,16 +122,21 @@ export class BaseExecutor {
       }
       retryAttemptsByUrl[urlIndex]++;
       log?.debug?.("RETRY", `${reason} retry ${retryAttemptsByUrl[urlIndex]}/${attempts} after ${waitMs / 1000}s`);
+      // Wait for cancellation to release a pinned session before retrying.
+      try { await response?.body?.cancel?.(); } catch {}
       await new Promise(resolve => setTimeout(resolve, waitMs));
       return true;
     };
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
-      const url = this.buildUrl(model, stream, urlIndex, credentials);
-      const transformedBody = this.transformRequest(model, body, stream, credentials);
-      const headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
+      let url = this.buildUrl(model, stream, urlIndex, credentials);
+      let transformedBody = this.transformRequest(model, body, stream, credentials);
+      let headers = this.buildHeaders(credentials, stream, url, model, transformedBody);
       // User per-provider override wins over registry headers (blocked names filtered at the API)
       if (providerOverrides?.headers) Object.assign(headers, providerOverrides.headers);
+      ({ url, headers, body: transformedBody } = sanitizeCustomApiRequest(this.provider, credentials, {
+        url, headers, body: transformedBody,
+      }));
 
       if (!retryAttemptsByUrl[urlIndex]) retryAttemptsByUrl[urlIndex] = 0;
 
@@ -143,7 +150,7 @@ export class BaseExecutor {
         const bodyStr = JSON.stringify(transformedBody);
         const fetchT0 = Date.now();
         dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${bodyStr.length}B | connectTimeout=${timeoutMs}ms`);
-        const response = await proxyAwareFetch(url, {
+        const fetchOptions = {
           method: "POST",
           headers,
           body: bodyStr,
@@ -151,7 +158,10 @@ export class BaseExecutor {
           // Protocol adapters that need their own transport (opencode's TLS
           // fingerprint) override the direct path; proxies still take priority.
           ...(directFetch ? { directFetch } : {}),
-        }, proxyOptions);
+        };
+        const response = await (isCustomApiProvider(this.provider)
+          ? fetchCustomApi(this.provider, credentials, url, fetchOptions, proxyOptions ?? {})
+          : proxyAwareFetch(url, fetchOptions, proxyOptions));
         clearTimeout(connectTimer);
         const ct = response.headers?.get?.("content-type") || "";
         const cl = response.headers?.get?.("content-length") || "?";
@@ -160,6 +170,7 @@ export class BaseExecutor {
         if (await tryRetry(urlIndex, response.status, `status ${response.status}`, response)) { urlIndex--; continue; }
 
         if (this.shouldRetry(response.status, urlIndex)) {
+          try { await response.body?.cancel?.(); } catch {}
           log?.debug?.("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
           lastStatus = response.status;
           continue;

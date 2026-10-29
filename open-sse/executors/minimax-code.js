@@ -1,5 +1,7 @@
 import { DefaultExecutor } from "./default.js";
+import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { refreshMiniMaxCodeToken } from "../services/tokenRefresh.js";
+import { getLeaseToken, invalidateLeaseToken, isLeaseConnection } from "../services/minimaxCodeLease.js";
 
 // MiniMax Code reports credit/quota exhaustion as 402/403 (and 429) with a
 // body that names the balance. chatCore treats 401/403 as refresh-and-retry
@@ -42,15 +44,41 @@ export async function normalizeQuotaResponse(response) {
 
 export class MinimaxCodeExecutor extends DefaultExecutor {
   async execute(args) {
-    const result = await super.execute(args);
-    if (!result?.response) return result;
-    return { ...result, response: await normalizeQuotaResponse(result.response) };
+    const leaseMode = isLeaseConnection(args?.credentials);
+    const execute = async (accessToken) => {
+      const requestArgs = leaseMode
+        ? { ...args, credentials: { ...args.credentials, accessToken } }
+        : args;
+      const result = await super.execute(requestArgs);
+      if (!result?.response) return result;
+      return { ...result, response: await normalizeQuotaResponse(result.response) };
+    };
+
+    let lease = leaseMode ? await getLeaseToken(args.credentials, args.log) : null;
+    const result = await execute(lease?.accessToken);
+    if (!leaseMode || ![HTTP_STATUS.UNAUTHORIZED, HTTP_STATUS.FORBIDDEN].includes(result?.response?.status)) {
+      return result;
+    }
+
+    // Retry a rotated desktop token here. The generic refresh callback persists
+    // credentials, so leased tokens must never reach that path.
+    invalidateLeaseToken(args.credentials, `upstream ${result.response.status}`, args.log);
+    try {
+      lease = await getLeaseToken(args.credentials, args.log);
+    } catch (error) {
+      args.log?.warn?.("TOKEN", `MCODE lease refresh failed: ${error.message}`);
+      return result;
+    }
+    await result.response.body?.cancel().catch(() => {});
+    return execute(lease.accessToken);
   }
 
-  // Route the on-401 refresh through REFRESH_HANDLERS' handler (single-use
-  // refresh tokens, deduped by token value) instead of the generic grant
-  // builder — the default path would re-send a spent refresh token.
+  // Lease retries stay inside execute so borrowed tokens remain in memory.
+  // OAuth mode: route through REFRESH_HANDLERS' handler (single-use refresh
+  // tokens, deduped by token value) instead of the
+  // generic grant builder — the default path would re-send a spent token.
   async refreshCredentials(credentials, log) {
+    if (isLeaseConnection(credentials)) return null;
     if (!credentials?.refreshToken) return null;
     return refreshMiniMaxCodeToken(this.provider, credentials.refreshToken, log);
   }
