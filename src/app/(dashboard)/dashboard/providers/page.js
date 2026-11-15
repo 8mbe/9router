@@ -405,7 +405,7 @@ export default function ProvidersPage() {
       ([key, info]) =>
         !info.hidden &&
         (info.serviceKinds ?? ["llm"]).includes("llm") &&
-        matchSearch(info.name) &&
+        matchSearch(key, info) &&
         matchStatus(getProviderStats(key, "cookie"), info.noAuth),
     )
     .sort(([ka, a], [kb, b]) => {
