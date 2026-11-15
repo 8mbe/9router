@@ -29,7 +29,7 @@ const nextConfig = {
   // plugins by dynamic require, neither of which survives bundling.
   // The agent SDK resolves its bundled Claude Code executable relative to its
   // own package. Keep that location intact in standalone deployments.
-  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers", "@anthropic-ai/claude-agent-sdk", "@modelcontextprotocol/sdk", "wreq-js"],
+  serverExternalPackages: ["better-sqlite3", "sql.js", "node:sqlite", "bun:sqlite", "open", "@aws-sdk/credential-providers", "@anthropic-ai/claude-agent-sdk", "@modelcontextprotocol/sdk", "wreq-js", "undici"],
   turbopack: {
     root: tracingRoot
   },
@@ -37,7 +37,7 @@ const nextConfig = {
   outputFileTracingIncludes: {
     // The SDK resolves its optional platform binary using a computed package
     // name, which static file tracing cannot discover.
-    "*": ["./node_modules/@anthropic-ai/claude-agent-sdk*/**/*"],
+    "*": ["./node_modules/@anthropic-ai/claude-agent-sdk*/**/*", "./node_modules/undici/**/*"],
   },
   outputFileTracingExcludes: {
     "*": ["./gitbook/**/*"]

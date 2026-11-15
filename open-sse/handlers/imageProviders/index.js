@@ -32,6 +32,7 @@ const ADAPTERS = {
   venice: createOpenAIAdapter("venice"),
   xai: createOpenAIAdapter("xai"),
   sensenova: createOpenAIAdapter("sensenova"),
+  "sensenova-intl": createOpenAIAdapter("sensenova-intl"),
   gemini,
   codex,
   sdwebui,

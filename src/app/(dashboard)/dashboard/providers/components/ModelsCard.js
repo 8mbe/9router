@@ -1,5 +1,7 @@
 "use client";
 
+import { applyQoderModelNames } from "@/shared/utils/providerCustomModels";
+
 import { useState, useCallback, useEffect } from "react";
 import PropTypes from "prop-types";
 import { Card, Button, Modal } from "@/shared/components";
@@ -243,7 +245,7 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
       && ![...builtInModels, ...upstreamModels].some((b) => b.id === m.id)
   );
 
-  const displayModels = [...builtInModels, ...upstreamModels.filter((m) => !builtInModels.some((b) => b.id === m.id))];
+  const displayModels = [...applyQoderModelNames(builtInModels, customModels, providerAlias), ...upstreamModels.filter((m) => !builtInModels.some((b) => b.id === m.id))];
 
   return (
     <>

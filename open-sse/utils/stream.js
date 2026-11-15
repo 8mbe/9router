@@ -223,6 +223,8 @@ export function createSSEStream(options = {}) {
           if (completionMetadata && trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]") {
             completionMetadata.upstreamDoneSeen = true;
           }
+          // Upstream already sent the sentinel; flush() must not append a second one.
+          if (trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]") streamDoneSent = true;
 
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
@@ -524,14 +526,19 @@ export function createSSEStream(options = {}) {
         if (remaining) buffer += remaining;
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
-          if (buffer) {
-            if (completionMetadata && buffer.trim().startsWith("data:")) {
-              const tailData = buffer.trim().slice(5).trim();
-              if (tailData === "[DONE]") completionMetadata.upstreamDoneSeen = true;
-              else {
-                try { observeOpenAIChunk(JSON.parse(tailData)); } catch { /* forwarded verbatim below */ }
-              }
+          // An unterminated trailing "data: [DONE]" is the upstream sentinel: don't
+          // forward it raw (it would glue onto the properly framed one appended
+          // below, #5592).
+          const tail = buffer.trim();
+          const tailIsDone = tail.startsWith("data:") && tail.slice(5).trim() === "[DONE]";
+          if (completionMetadata && buffer.trim().startsWith("data:")) {
+            const tailData = buffer.trim().slice(5).trim();
+            if (tailData === "[DONE]") completionMetadata.upstreamDoneSeen = true;
+            else {
+              try { observeOpenAIChunk(JSON.parse(tailData)); } catch { /* forwarded verbatim below */ }
             }
+          }
+          if (!tailIsDone && buffer) {
             let output = buffer;
             if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
               output = "data: " + buffer.slice(5);

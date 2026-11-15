@@ -112,7 +112,7 @@ export async function handleImageGenerationCore({
   let requestBody;
 
   try {
-    url = adapter.buildUrl(model, credentials);
+    url = adapter.buildUrl(model, credentials, body);
     requestBody = await adapter.buildBody(model, body);
     headers = adapter.buildHeaders(credentials, requestBody, model, body);
     ({ url, headers, body: requestBody } = sanitizeCustomApiRequest(provider, credentials, {
@@ -162,7 +162,7 @@ export async function handleImageGenerationCore({
         try { await providerResponse.body?.cancel?.(); } catch {}
         let retryBody = await adapter.buildBody(model, body);
         let retryHeaders = adapter.buildHeaders(credentials, retryBody, model, body);
-        let retryUrl = adapter.buildUrl(model, credentials);
+        let retryUrl = adapter.buildUrl(model, credentials, body);
         ({ url: retryUrl, headers: retryHeaders, body: retryBody } = sanitizeCustomApiRequest(provider, credentials, {
           url: retryUrl, headers: retryHeaders, body: retryBody,
         }));
@@ -177,6 +177,27 @@ export async function handleImageGenerationCore({
       }
     } else {
       log?.warn?.("TOKEN", `${provider.toUpperCase()} | refresh failed`);
+    }
+  }
+
+  // Adapter may rewrite a rejected request once, before the failure locks the account
+  if (!providerResponse.ok && adapter.buildFallbackBody) {
+    const errorText = await providerResponse.clone().text().catch(() => "");
+    const fallbackBody = adapter.buildFallbackBody(requestBody, providerResponse.status, errorText);
+    if (fallbackBody) {
+      log?.warn?.("IMAGE", `${provider.toUpperCase()} | ${model} | retrying with fallback request`);
+      try {
+        const fallbackHeaders = adapter.buildHeaders(credentials, fallbackBody, model, body);
+        providerResponse = await fetch(url, {
+          method: "POST",
+          headers: fallbackHeaders,
+          body: serializeRequestBody(fallbackBody),
+        });
+        requestBody = fallbackBody;
+        headers = fallbackHeaders;
+      } catch {
+        log?.warn?.("IMAGE", `${provider.toUpperCase()} | fallback request failed`);
+      }
     }
   }
 

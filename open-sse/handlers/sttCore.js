@@ -16,6 +16,19 @@ function fetchStt(cfg, url, options = {}) {
   });
 }
 
+// Next.js polyfills globalThis.FormData with a Web API implementation that lacks
+// internal undici symbols. When passed to fetch(), undici cannot serialize it as
+// multipart and falls back to String(body) ("[object FormData]" with text/plain).
+// Using undici's FormData ensures fetch() serializes multipart bodies correctly.
+let FormDataImpl = globalThis.FormData;
+try {
+  const undici = await import("undici");
+  if (undici?.FormData) FormDataImpl = undici.FormData;
+} catch {
+  // Fall back to globalThis.FormData in lightweight test harnesses where undici is omitted
+}
+const FormData = FormDataImpl;
+
 // Build auth headers from sttConfig + token
 function buildAuthHeaders(cfg, token) {
   if (!token) return {};

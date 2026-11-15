@@ -1,3 +1,4 @@
+import { setClaudeCliFallback } from "../utils/claudeCliVersion.js";
 import { platform, arch } from "os";
 import { randomUUID } from "crypto";
 
@@ -23,13 +24,16 @@ export function mapStainlessArch() {
 
 // Anthropic API version (single source — reused across claude-format providers/executors)
 export const ANTHROPIC_API_VERSION = "2023-06-01";
+// Floor version only; the live value comes from npm (utils/claudeCliVersion.js)
+// and outbound claude-cli/x.y.z headers are rewritten in proxyAwareFetch.
+export const CLAUDE_CLI_VERSION = "2.1.322";
+setClaudeCliFallback(CLAUDE_CLI_VERSION);
 
 // === Claude Code client fingerprint ===
 // Captured from a live `claude` CLI with scripts/capture-claude-headers.mjs
 // (a reverse proxy that records the real request before forwarding it upstream).
 // Re-run that script after a CLI upgrade and refresh the three constants below
 // rather than guessing — providers such as agentrouter gate on this identity.
-export const CLAUDE_CLI_VERSION = "2.1.280";
 export const CLAUDE_SDK_VERSION = "0.112.1";   // X-Stainless-Package-Version
 export const CLAUDE_NODE_VERSION = "v26.3.0";  // X-Stainless-Runtime-Version
 

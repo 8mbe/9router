@@ -49,11 +49,11 @@ function anonymizeBody(body) {
   if (typeof body === "string") {
     try { return JSON.stringify(anonymizeBody(JSON.parse(body))); } catch { return body; }
   }
-  if (typeof FormData !== "undefined" && body instanceof FormData) {
-    const result = new FormData();
+  if (body && Object.prototype.toString.call(body) === "[object FormData]") {
+    const result = new body.constructor();
     for (const [name, value] of body.entries()) {
       if (privateFields.has(normalizeField(name))) continue;
-      if (value instanceof Blob) result.append(name, value, anonymousFilename(value));
+      if (value instanceof Blob || ["[object File]", "[object Blob]"].includes(Object.prototype.toString.call(value))) result.append(name, value, anonymousFilename(value));
       else result.append(name, value);
     }
     return result;

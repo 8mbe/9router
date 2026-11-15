@@ -23,7 +23,7 @@
       "Anthropic-Version": "2023-06-01",
       "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28,fallback-credit-2026-06-01",
       "Anthropic-Dangerous-Direct-Browser-Access": "true",
-      "User-Agent": "claude-cli/2.1.280 (external, cli)",
+      "User-Agent": "claude-cli/2.1.322 (external, cli)",
       "X-App": "cli",
       "X-Stainless-Retry-Count": "0",
       "X-Stainless-Runtime-Version": "v26.3.0",
@@ -115,7 +115,7 @@
       "Anthropic-Version": "2023-06-01",
       "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28,fallback-credit-2026-06-01",
       "Anthropic-Dangerous-Direct-Browser-Access": "true",
-      "User-Agent": "claude-cli/2.1.280 (external, cli)",
+      "User-Agent": "claude-cli/2.1.322 (external, cli)",
       "X-App": "cli",
       "X-Stainless-Retry-Count": "0",
       "X-Stainless-Runtime-Version": "v26.3.0",
@@ -224,11 +224,11 @@
     "baseUrl": "https://chatgpt.com/backend-api/codex/responses",
     "format": "openai-responses",
     "forceStream": true,
-    "cliVersion": "0.159.0",
+    "cliVersion": "0.167.1",
     "headers": {
       "originator": "codex_cli_rs",
-      "User-Agent": "codex_cli_rs/0.159.0",
-      "version": "0.159.0"
+      "User-Agent": "codex_cli_rs/0.167.1",
+      "version": "0.167.1"
     },
     "usage": {
       "url": "https://chatgpt.com/backend-api/wham/usage",
@@ -249,7 +249,7 @@
     "forceStream": true,
     "headers": {
       "User-Agent": "cli",
-      "x-command-code-version": "1.88.0",
+      "x-command-code-version": "1.88.5",
       "x-cli-environment": "production",
       "x-cli-surface": "cli",
       "x-taste-learning": "false"
@@ -754,7 +754,8 @@
   "nvidia": {
     "baseUrl": "https://integrate.api.nvidia.com/v1/chat/completions",
     "validateUrl": "https://integrate.api.nvidia.com/v1/models",
-    "format": "openai"
+    "format": "openai",
+    "timeoutMs": 90000
   },
   "ollama-local": {
     "baseUrl": "http://localhost:11434/api/chat",
@@ -781,16 +782,16 @@
     "format": "openai"
   },
   "opencode-go": {
-    "baseUrl": "https://opencode.ai/zen/go/v1/chat/completions",
+    "baseUrl": "https://opencode.ai/inference/go/openai/v1/chat/completions",
     "headers": {},
     "usage": {
-      "url": "https://opencode.ai/zen/go/v1/usage"
+      "url": "https://opencode.ai/inference/go/v1/usage"
     },
     "format": "openai",
     "transports": [
       {
         "format": "openai",
-        "baseUrl": "https://opencode.ai/zen/go/v1/chat/completions",
+        "baseUrl": "https://opencode.ai/inference/go/openai/v1/chat/completions",
         "auth": {
           "combined": true,
           "header": "Authorization",
@@ -799,17 +800,18 @@
       },
       {
         "format": "claude",
-        "baseUrl": "https://opencode.ai/zen/go/v1/messages",
+        "baseUrl": "https://opencode.ai/inference/go/anthropic/v1/messages",
         "auth": {
           "combined": true,
           "header": "x-api-key",
           "scheme": "raw",
           "anthropicVersion": true
-        }
+        },
+        "thinkingFormat": "claude-adaptive"
       },
       {
         "format": "openai-responses",
-        "baseUrl": "https://opencode.ai/zen/go/v1/responses",
+        "baseUrl": "https://opencode.ai/inference/go/openai/v1/responses",
         "auth": {
           "combined": true,
           "header": "Authorization",
@@ -1353,5 +1355,17 @@
       "scheme": "Bearer"
     },
     "clientId": "3GUryQ7ldAeKEuD2obYnppsnmj58eP5u"
+  },
+  "sensenova-intl": {
+    "baseUrl": "https://token.sensenova.ai/v1/chat/completions",
+    "validateUrl": "https://token.sensenova.ai/v1/models",
+    "quirks": {
+      "reasoningAliasFields": true
+    },
+    "format": "openai"
+  },
+  "synthetic": {
+    "baseUrl": "https://api.synthetic.new/openai/v1/chat/completions",
+    "format": "openai"
   }
 }
