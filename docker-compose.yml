@@ -6,8 +6,6 @@ services:
     image: 9router:local
     container_name: 9router
     restart: always
-    ports:
-      - "20128:20128"
     volumes:
       - 9router-data:/app/data
     env_file:
@@ -28,8 +26,6 @@ services:
     restart: always
     profiles:
       - headroom
-    ports:
-      - "127.0.0.1:8787:8787"
 
 volumes:
   9router-data:
