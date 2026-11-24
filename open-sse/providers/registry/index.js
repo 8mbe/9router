@@ -148,7 +148,9 @@ import p145 from "./xiaomi-tokenplan.js";
 import p146 from "./xquik.js";
 import p147 from "./youcom.js";
 import p148 from "./zed.js";
-
+import p149 from "./opendesign-go.js";
+import p150 from "./deeprelay.js";
+import p151 from "./qwencloud.js";
 export default [
   p0,
   p1,
@@ -299,4 +301,7 @@ export default [
   p146,
   p147,
   p148,
+  p149,
+  p150,
+  p151,
 ];

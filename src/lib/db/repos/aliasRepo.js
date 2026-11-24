@@ -33,11 +33,14 @@ export async function getCustomModels() {
 // Re-adding an existing model updates caps/name/transport without resetting omitted fields.
 // `db` is the already-resolved adapter so a batch can run every entry inside one
 // transaction instead of opening one per model.
-function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, contextLength, transport }) {
+function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, contextLength, transport, upstreamModelId }) {
   const k = customKey(providerAlias, id, type);
   // null clears a previously stored window; undefined leaves it untouched, so a
   // re-add that only sets caps does not wipe a context length found on import.
   const hasContext = contextLength !== undefined;
+  const cleanUpstream = typeof upstreamModelId === "string" && upstreamModelId.trim()
+    ? upstreamModelId.trim()
+    : null;
   const row = db.get(`SELECT value FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
   if (row) {
     const prev = parseJson(row.value) || {};
@@ -47,6 +50,7 @@ function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, co
       ...(caps ? { caps } : {}),
       ...(transport ? { transport } : {}),
       ...(hasContext ? { contextLength } : {}),
+      ...(cleanUpstream ? { upstreamModelId: cleanUpstream } : {}),
     };
     db.run(`UPDATE kv SET value = ? WHERE scope = 'customModels' AND key = ?`, [stringifyJson(next), k]);
     return false;
@@ -56,6 +60,7 @@ function upsertCustomModel(db, { providerAlias, id, type = "llm", name, caps, co
     ...(caps ? { caps } : {}),
     ...(transport ? { transport } : {}),
     ...(hasContext ? { contextLength } : {}),
+    ...(cleanUpstream ? { upstreamModelId: cleanUpstream } : {}),
   });
   db.run(`INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?)`, [k, value]);
   return true;

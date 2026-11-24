@@ -25,6 +25,13 @@ function sanitizeTransport(transport, type) {
   return transport.trim();
 }
 
+function sanitizeUpstreamModelId(upstreamModelId) {
+  if (typeof upstreamModelId !== "string") return null;
+  const trimmed = upstreamModelId.trim();
+  if (!trimmed || trimmed.length > 256 || /[\r\n\0]/.test(trimmed)) return null;
+  return trimmed;
+}
+
 // GET /api/models/custom - List all custom models
 export async function GET() {
   try {
@@ -39,11 +46,12 @@ export async function GET() {
 // Absent contextLength = leave any stored window alone; explicit null = clear it.
 // An unparseable value is treated as "clear" rather than silently stored.
 function normalizeEntry(raw) {
-  const { providerAlias, id, type, name, caps, contextLength, transport } = raw || {};
+  const { providerAlias, id, type, name, caps, contextLength, transport, upstreamModelId } = raw || {};
   if (!providerAlias || !id) return null;
   const cleanType = type || "llm";
   const cleanCaps = sanitizeCaps(caps);
   const cleanTransport = sanitizeTransport(transport, cleanType);
+  const cleanUpstreamModelId = sanitizeUpstreamModelId(upstreamModelId);
   const hasContext = contextLength !== undefined;
   return {
     providerAlias,
@@ -52,6 +60,7 @@ function normalizeEntry(raw) {
     name,
     ...(cleanCaps ? { caps: cleanCaps } : {}),
     ...(cleanTransport ? { transport: cleanTransport } : {}),
+    ...(cleanUpstreamModelId ? { upstreamModelId: cleanUpstreamModelId } : {}),
     ...(hasContext ? { contextLength: normalizeContextLength(contextLength) } : {}),
   };
 }
